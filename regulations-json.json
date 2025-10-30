@@ -1,0 +1,58 @@
+{
+  "published": [
+    {
+      "id": "1",
+      "title": "Peraturan Menteri ESDM tentang Pertambangan Mineral dan Batubara",
+      "number": "Permen ESDM No. 7 Tahun 2024",
+      "ministry": "ESDM",
+      "category": "Teknis Pertambangan",
+      "date": "2024-03-15",
+      "summary": "Mengatur teknis pertambangan mineral dan batubara termasuk persyaratan eksplorasi dan eksploitasi untuk tambang emas",
+      "link": "https://jdih.esdm.go.id",
+      "status": "Aktif",
+      "publishedDate": "2024-03-15",
+      "verified": true
+    },
+    {
+      "id": "2",
+      "title": "Peraturan Menteri KLHK tentang Izin Lingkungan",
+      "number": "Permen LHK No. 4 Tahun 2024",
+      "ministry": "KLHK",
+      "category": "Lingkungan",
+      "date": "2024-02-20",
+      "summary": "Persyaratan AMDAL dan izin lingkungan untuk kegiatan pertambangan termasuk pengelolaan limbah B3",
+      "link": "https://jdih.menlhk.go.id",
+      "status": "Aktif",
+      "publishedDate": "2024-02-20",
+      "verified": true
+    },
+    {
+      "id": "3",
+      "title": "Peraturan tentang Reklamasi dan Pascatambang",
+      "number": "Permen ESDM No. 26 Tahun 2018",
+      "ministry": "ESDM",
+      "category": "Reklamasi",
+      "date": "2018-11-28",
+      "summary": "Pedoman reklamasi dan pascatambang untuk pertambangan mineral dan batubara",
+      "link": "https://jdih.esdm.go.id",
+      "status": "Aktif",
+      "publishedDate": "2018-11-28",
+      "verified": true
+    },
+    {
+      "id": "4",
+      "title": "Peraturan K3 Pertambangan",
+      "number": "Permen ESDM No. 38 Tahun 2019",
+      "ministry": "ESDM",
+      "category": "Keselamatan Kerja",
+      "date": "2019-12-10",
+      "summary": "Penerapan sistem manajemen keselamatan pertambangan dan standar K3 di area tambang",
+      "link": "https://jdih.esdm.go.id",
+      "status": "Aktif",
+      "publishedDate": "2019-12-10",
+      "verified": true
+    }
+  ],
+  "pending": [],
+  "lastUpdated": "2024-10-30T08:00:00.000Z"
+}
