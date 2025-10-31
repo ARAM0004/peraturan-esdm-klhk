@@ -1,63 +1,78 @@
 name: Auto-Scraper JDIH
 
+# trigger on schedule and manual run — adjust as needed
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 0 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: write   # needed so the workflow can push commits
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 0
-    
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    
-    - name: Install dependencies
-      run: |
-        pip install requests beautifulsoup4 lxml
-    
-    - name: Run scraper
-      run: |
-        python .scripts/scraper.py
-    
-    - name: Pull latest changes
-      run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git pull --rebase origin main
-    
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # get full history so we can rebase/merge safely
+          persist-credentials: true
 
-    - name: Commit and push if changed
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git add regulations.json
-        # If there are changes staged or unstaged
-        if ! git diff --quiet || ! git diff --staged --quiet; then
-          # Fetch remote main and rebase local changes on top to avoid push rejection
+      - name: Set up Git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run scraper
+        run: |
+          # Replace the lines below with your existing scraping commands
+          # For example: python scraper.py
+          echo "Run your scraping script here"
+          # Example: python ./scripts/scrape.py --output .
+          
+      - name: Stage changes
+        run: |
+          git add -A
+
+      - name: Commit changes if any
+        id: commit-check
+        run: |
+          if git diff --cached --quiet; then
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
+          else
+            git commit -m "🤖 Auto-update regulations $(date -u +'%Y-%m-%d %H:%M:%S')"
+            echo "no_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch remote and rebase onto origin/main
+        if: steps.commit-check.outputs.no_changes == 'false'
+        run: |
+          # Ensure remote main is fetched
           git fetch origin main
-          git rebase origin/main
-          git commit -m "🤖 Auto-update regulations $(date +'%Y-%m-%d %H:%M:%S')" || true
+          # Make sure we are on the workflow's branch (should be main)
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "On branch: $CURRENT_BRANCH"
+          # Rebase local commit(s) onto the latest origin/main to avoid non-fast-forward push errors.
+          # If rebase fails, abort and fail the job so maintainers can resolve conflicts manually.
+          git rebase origin/main || {
+            echo "Rebase failed — aborting. Manual intervention required." >&2
+            git rebase --abort || true
+            exit 1
+          }
+
+      - name: Push changes
+        if: steps.commit-check.outputs.no_changes == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Push the rebased local changes to origin/main
           git push origin HEAD:main
-        else
-          echo "No changes to commit"
-        fi
+
+      - name: No-op when nothing to commit
+        if: steps.commit-check.outputs.no_changes == 'true'
+        run: echo "Nothing to push, exiting."
