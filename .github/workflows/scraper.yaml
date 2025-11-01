@@ -35,7 +35,7 @@ jobs:
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-    
+
     - name: Commit and push if changed
       run: |
         git add -A
@@ -43,5 +43,7 @@ jobs:
           echo "No changes to commit"
         else
           git commit -m "Auto-update regulations"
+          git pull --rebase origin main
           git push
         fi
+
