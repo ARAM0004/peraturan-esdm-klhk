@@ -152,54 +152,46 @@
             render();
         }
 
-        <script>
-  // Fungsi hapus biasa yang kamu punya
-  function confirmDelete() {
-      const id = state.showDeleteConfirm;
-      state.showDeleteConfirm = null;
-      filterRegulations();
-      render();
-
-      // Panggil fungsi trigger API
-      triggerDelete(id);
-  }
-
-  // Fungsi GitHub API
-  async function triggerDelete(id) {
-      const repo = "ARAM0004/peraturan-esdm-klhk";
-      const path = "trigger/update.json";
-      const apiUrl = `https://api.github.com/repos/${repo}/contents/${path}`;
-      const token = "GANTI_DENGAN_TOKEN_REPO_YANG_AMAN";
-
-      const triggerData = {
-          delete_id: id,
-          timestamp: new Date().toISOString()
-      };
-
-      const getRes = await fetch(apiUrl, {
-          headers: { Authorization: `token ${token}` }
-      });
-      const fileData = await getRes.json();
-      const sha = fileData.sha || null;
-
-      await fetch(apiUrl, {
-          method: "PUT",
-          headers: {
-              Authorization: `token ${token}`,
-              "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-              message: "Trigger regulation delete",
-              content: btoa(JSON.stringify(triggerData, null, 2)),
-              sha
-          })
-      });
-
-      alert("✅ Penghapusan sedang diproses! Tunggu ±1 menit agar data terupdate.");
-
+        function confirmDelete() {
+            const id = state.showDeleteConfirm;
+            state.showDeleteConfirm = null;
+            filterRegulations();
             render();
+        
+            // Kirim trigger ke GitHub agar workflow update_json.py memproses penghapusan
+            triggerDelete(id);
         }
-
+        
+        async function triggerDelete(id) {
+            const repo = "ARAM0004/peraturan-esdm-klhk";
+            const path = "trigger/delete_trigger.json";
+            const apiUrl = `https://api.github.com/repos/${repo}/contents/${path}`;
+            const message = { delete_id: id, timestamp: new Date().toISOString() };
+        
+            try {
+                // Ambil SHA file lama agar bisa diupdate
+                const res = await fetch(apiUrl);
+                const data = await res.json();
+                const sha = data.sha || null;
+        
+                // Update isi file trigger
+                await fetch(apiUrl, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: "Trigger delete regulation",
+                        content: btoa(JSON.stringify(message, null, 2)),
+                        sha
+                    })
+                });
+        
+                alert("✅ Penghapusan sedang diproses! Tunggu ±1 menit agar data terupdate.");
+            } catch (error) {
+                console.error("Gagal memicu penghapusan:", error);
+                alert("❌ Terjadi kesalahan saat mengirim trigger penghapusan.");
+            }
+        }
+        
         function cancelDelete() {
             state.showDeleteConfirm = null;
             render();
