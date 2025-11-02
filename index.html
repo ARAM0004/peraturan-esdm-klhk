@@ -152,18 +152,51 @@
             render();
         }
 
-        function confirmDelete() {
-            const id = state.showDeleteConfirm;
-            state.regulations = state.regulations.filter(r => r.id !== id);
-            state.showDeleteConfirm = null;
-            filterRegulations();
-            
-            // Save to localStorage for demo (in real app, would push to GitHub)
-            localStorage.setItem('regulations-backup', JSON.stringify({
-                published: state.regulations,
-                pending: state.pendingRegs
-            }));
-            
+        <script>
+  // Fungsi hapus biasa yang kamu punya
+  function confirmDelete() {
+      const id = state.showDeleteConfirm;
+      state.showDeleteConfirm = null;
+      filterRegulations();
+      render();
+
+      // Panggil fungsi trigger API
+      triggerDelete(id);
+  }
+
+  // Fungsi GitHub API
+  async function triggerDelete(id) {
+      const repo = "ARAM0004/peraturan-esdm-klhk";
+      const path = "trigger/update.json";
+      const apiUrl = `https://api.github.com/repos/${repo}/contents/${path}`;
+      const token = "GANTI_DENGAN_TOKEN_REPO_YANG_AMAN";
+
+      const triggerData = {
+          delete_id: id,
+          timestamp: new Date().toISOString()
+      };
+
+      const getRes = await fetch(apiUrl, {
+          headers: { Authorization: `token ${token}` }
+      });
+      const fileData = await getRes.json();
+      const sha = fileData.sha || null;
+
+      await fetch(apiUrl, {
+          method: "PUT",
+          headers: {
+              Authorization: `token ${token}`,
+              "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+              message: "Trigger regulation delete",
+              content: btoa(JSON.stringify(triggerData, null, 2)),
+              sha
+          })
+      });
+
+      alert("✅ Penghapusan sedang diproses! Tunggu ±1 menit agar data terupdate.");
+
             render();
         }
 
