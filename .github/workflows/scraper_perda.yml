@@ -2,7 +2,7 @@ name: Scraper Perda
 
 on:
   schedule:
-    - cron: '0 2 * * 0'  # Setiap Minggu jam 09:00 WIB
+    - cron: '0 2 * * 0'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
     
@@ -23,22 +24,28 @@ jobs:
         python-version: '3.10'
     
     - name: Install dependencies
-      run: pip install requests beautifulsoup4 lxml
+      run: |
+        pip install requests beautifulsoup4 lxml
     
     - name: Run Perda scraper
-      run: python .scripts/scraper_perda.py
+      run: |
+        python .scripts/scraper_perda.py
     
     - name: Configure Git
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
     
-    - name: Commit and push
+    - name: Pull latest changes
+      run: |
+        git pull origin main --rebase || true
+    
+    - name: Commit and push if changed
       run: |
         git add -A
-        if git diff --cached --quiet; then
-          echo "No changes"
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
         else
-          git commit -m "Auto-update Perda"
-          git push
+          git commit -m "Auto-update Perda $(date -u +'%Y-%m-%d %H:%M:%S')" || true
+          git push origin main || (git pull --rebase origin main && git push origin main)
         fi
