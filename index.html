@@ -25,6 +25,13 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-50 min-h-screen">
@@ -34,6 +41,43 @@
         const GITHUB_REPO = "ARAM0004/peraturan-esdm-klhk";
         const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}`;
         const RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main`;
+
+        // Default Configuration
+        const DEFAULT_CONFIG = {
+            scraper: {
+                esdm_klhk: {
+                    enabled: true,
+                    schedule: '0 1 * * *',
+                    limit: 10,
+                    auto_publish_days: 7
+                },
+                perda: {
+                    enabled: true,
+                    schedule: '0 2 * * 0',
+                    limit: 20,
+                    provinces: [
+                        { url: 'https://jdih.sulutprov.go.id/', name: 'Sulawesi Utara', enabled: true },
+                        { url: 'https://jdih.kaltaraprov.go.id/', name: 'Kalimantan Utara', enabled: true },
+                        { url: 'https://jdih.kaltimprov.go.id/', name: 'Kalimantan Timur', enabled: true },
+                        { url: 'https://jdih.papua.go.id/', name: 'Papua', enabled: false },
+                        { url: 'https://jdih.ntbprov.go.id/', name: 'Nusa Tenggara Barat', enabled: false }
+                    ],
+                    keywords: 'pertambangan,tambang,mineral,galian'
+                }
+            },
+            display: {
+                theme: 'yellow',
+                itemsPerPage: 20,
+                showStats: true,
+                showLastUpdate: true
+            },
+            categories: {
+                enabled: ['Perizinan', 'Lingkungan', 'Keselamatan Kerja', 'Teknis Pertambangan', 'Reklamasi', 'Pajak & Royalti', 'Perda', 'Lainnya']
+            },
+            ministries: {
+                enabled: ['ESDM', 'KLHK', 'Perda', 'Gabungan']
+            }
+        };
 
         let state = {
             regulations: [],
@@ -49,12 +93,42 @@
             showAddOldForm: false,
             showDeleteConfirm: null,
             showApproveModal: null,
+            showConfigPanel: false,
+            showExportModal: false,
             processingAction: false,
-            notification: null
+            notification: null,
+            config: { ...DEFAULT_CONFIG },
+            currentPage: 1
         };
 
-        const categories = ['Semua', 'Perizinan', 'Lingkungan', 'Keselamatan Kerja', 'Teknis Pertambangan', 'Reklamasi', 'Pajak & Royalti', 'Perda', 'Lainnya'];
-        const ministries = ['Semua', 'ESDM', 'KLHK', 'Perda', 'Gabungan'];
+        const categories = ['Semua', ...DEFAULT_CONFIG.categories.enabled];
+        const ministries = ['Semua', ...DEFAULT_CONFIG.ministries.enabled];
+
+        // Load config from localStorage
+        function loadConfig() {
+            const saved = localStorage.getItem('portal_config');
+            if (saved) {
+                try {
+                    state.config = { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+                } catch (e) {
+                    console.error('Error loading config:', e);
+                }
+            }
+        }
+
+        function saveConfig() {
+            localStorage.setItem('portal_config', JSON.stringify(state.config));
+            showNotification('✅ Konfigurasi disimpan', 'success');
+        }
+
+        function resetConfig() {
+            if (confirm('Reset semua konfigurasi ke default?')) {
+                state.config = { ...DEFAULT_CONFIG };
+                localStorage.removeItem('portal_config');
+                showNotification('🔄 Konfigurasi direset ke default', 'info');
+                render();
+            }
+        }
 
         // Notification System
         function showNotification(message, type = 'info') {
@@ -69,7 +143,7 @@
         // Load data from GitHub
         async function loadData() {
             try {
-                const response = await fetch(`${RAW_URL}/regulations.json`);
+                const response = await fetch(`${RAW_URL}/regulations.json?t=${Date.now()}`);
                 if (!response.ok) throw new Error('Failed to fetch');
                 
                 const data = await response.json();
@@ -111,157 +185,78 @@
             state.filteredRegs = filtered;
         }
 
-        // GitHub Actions Trigger Functions
-        async function triggerGitHubAction(action, payload) {
-            state.processingAction = true;
-            render();
+        // Export Functions
+        function exportToJSON() {
+            const data = {
+                exported_at: new Date().toISOString(),
+                total: state.regulations.length,
+                regulations: state.regulations
+            };
+            downloadFile(JSON.stringify(data, null, 2), 'peraturan-export.json', 'application/json');
+            showNotification('📥 Data diekspor ke JSON', 'success');
+        }
 
-            try {
-                const triggerPath = action === 'delete' ? 'trigger/delete_trigger.json' : 'trigger/update.json';
-                
-                // Get current file SHA
-                const getResponse = await fetch(`${GITHUB_API}/contents/${triggerPath}`);
-                const fileData = await getResponse.json();
-                
-                // Update trigger file
-                const updateResponse = await fetch(`${GITHUB_API}/contents/${triggerPath}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: `Trigger ${action} from web interface`,
-                        content: btoa(JSON.stringify(payload, null, 2)),
-                        sha: fileData.sha
-                    })
+        function exportToCSV() {
+            const headers = ['Nomor', 'Judul', 'Kementerian', 'Kategori', 'Tanggal', 'Status', 'Link'];
+            const rows = state.regulations.map(reg => [
+                reg.number,
+                reg.title,
+                reg.ministry,
+                reg.category,
+                reg.date,
+                reg.status,
+                reg.link || ''
+            ]);
+            
+            const csv = [headers, ...rows].map(row => 
+                row.map(cell => `"${cell}"`).join(',')
+            ).join('\n');
+            
+            downloadFile(csv, 'peraturan-export.csv', 'text/csv');
+            showNotification('📥 Data diekspor ke CSV', 'success');
+        }
+
+        function exportToMarkdown() {
+            let md = '# Database Peraturan ESDM, KLHK & Perda\n\n';
+            md += `Diekspor: ${new Date().toLocaleString('id-ID')}\n`;
+            md += `Total: ${state.regulations.length} peraturan\n\n`;
+            
+            const byMinistry = {};
+            state.regulations.forEach(reg => {
+                if (!byMinistry[reg.ministry]) byMinistry[reg.ministry] = [];
+                byMinistry[reg.ministry].push(reg);
+            });
+
+            for (const [ministry, regs] of Object.entries(byMinistry)) {
+                md += `## ${ministry} (${regs.length})\n\n`;
+                regs.forEach(reg => {
+                    md += `### ${reg.number}\n`;
+                    md += `**${reg.title}**\n\n`;
+                    md += `- Kategori: ${reg.category}\n`;
+                    md += `- Tanggal: ${reg.date}\n`;
+                    md += `- Status: ${reg.status}\n`;
+                    if (reg.link) md += `- [Lihat Dokumen](${reg.link})\n`;
+                    md += `\n${reg.summary}\n\n---\n\n`;
                 });
-
-                if (updateResponse.ok) {
-                    showNotification(`✅ ${action === 'delete' ? 'Penghapusan' : 'Update'} sedang diproses. Refresh halaman dalam 1-2 menit.`, 'success');
-                    return true;
-                } else {
-                    throw new Error('GitHub API request failed');
-                }
-            } catch (error) {
-                console.error('Error triggering action:', error);
-                showNotification('❌ Gagal mengirim trigger ke GitHub. Coba lagi.', 'error');
-                return false;
-            } finally {
-                state.processingAction = false;
-                render();
             }
+
+            downloadFile(md, 'peraturan-export.md', 'text/markdown');
+            showNotification('📥 Data diekspor ke Markdown', 'success');
         }
 
-        // Delete Regulation
-        async function deleteRegulation(id) {
-            state.showDeleteConfirm = id;
-            render();
+        function downloadFile(content, filename, type) {
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
         }
 
-        async function confirmDelete() {
-            const id = state.showDeleteConfirm;
-            state.showDeleteConfirm = null;
-            
-            const payload = {
-                delete_id: id,
-                timestamp: new Date().toISOString()
-            };
-
-            const success = await triggerGitHubAction('delete', payload);
-            if (success) {
-                // Optimistic UI update
-                state.regulations = state.regulations.filter(r => r.id !== id);
-                filterRegulations();
-            }
-            render();
-        }
-
-        function cancelDelete() {
-            state.showDeleteConfirm = null;
-            render();
-        }
-
-        // Approve Pending Regulation
-        async function approveRegulation(id) {
-            state.showApproveModal = id;
-            render();
-        }
-
-        async function confirmApprove() {
-            const id = state.showApproveModal;
-            const regulation = state.pendingRegs.find(r => r.id === id);
-            state.showApproveModal = null;
-
-            if (!regulation) return;
-
-            // Move to published
-            regulation.verified = true;
-            regulation.publishedDate = new Date().toISOString();
-            
-            state.regulations.unshift(regulation);
-            state.pendingRegs = state.pendingRegs.filter(r => r.id !== id);
-
-            // Trigger update to GitHub
-            const payload = {
-                action: 'approve',
-                regulation_id: id,
-                timestamp: new Date().toISOString()
-            };
-
-            await triggerGitHubAction('update', payload);
-            filterRegulations();
-            render();
-        }
-
-        function cancelApprove() {
-            state.showApproveModal = null;
-            render();
-        }
-
-        async function rejectRegulation(id) {
-            state.pendingRegs = state.pendingRegs.filter(r => r.id !== id);
-            showNotification('🗑️ Peraturan ditolak dan dihapus', 'info');
-            render();
-        }
-
-        // Add Old Regulation
-        function toggleAddOldForm() {
-            state.showAddOldForm = !state.showAddOldForm;
-            render();
-        }
-
-        async function addOldRegulation(event) {
-            event.preventDefault();
-            const form = event.target;
-            const formData = new FormData(form);
-            
-            const newReg = {
-                id: `manual-${Date.now()}`,
-                title: formData.get('title'),
-                number: formData.get('number'),
-                ministry: formData.get('ministry'),
-                category: formData.get('category'),
-                date: formData.get('date'),
-                summary: formData.get('summary'),
-                link: formData.get('link'),
-                status: formData.get('status'),
-                verified: true,
-                publishedDate: new Date().toISOString(),
-                source: 'manual'
-            };
-
-            state.regulations.unshift(newReg);
-            state.showAddOldForm = false;
-            
-            // Trigger save to GitHub
-            const payload = {
-                action: 'add_manual',
-                regulation: newReg,
-                timestamp: new Date().toISOString()
-            };
-
-            await triggerGitHubAction('update', payload);
-            filterRegulations();
-            showNotification('✅ Peraturan berhasil ditambahkan', 'success');
-            render();
+        function exportConfig() {
+            downloadFile(JSON.stringify(state.config, null, 2), 'portal-config.json', 'application/json');
+            showNotification('📥 Konfigurasi diekspor', 'success');
         }
 
         // Helper Functions
@@ -302,82 +297,70 @@
 
         function setActiveTab(tab) {
             state.activeTab = tab;
+            state.currentPage = 1;
             render();
         }
 
-        // Render Functions
+        function toggleConfigPanel() {
+            state.showConfigPanel = !state.showConfigPanel;
+            render();
+        }
+
+        function toggleExportModal() {
+            state.showExportModal = !state.showExportModal;
+            render();
+        }
+
+        // Pagination
+        function getPaginatedData() {
+            const itemsPerPage = state.config.display.itemsPerPage;
+            const start = (state.currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            return state.filteredRegs.slice(start, end);
+        }
+
+        function getTotalPages() {
+            return Math.ceil(state.filteredRegs.length / state.config.display.itemsPerPage);
+        }
+
+        function changePage(page) {
+            state.currentPage = page;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            render();
+        }
+
+        // Render Main
         function render() {
             const app = document.getElementById('app');
             
             if (state.loading) {
-                app.innerHTML = renderLoading();
+                app.innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center">
+                        <div class="text-center">
+                            <div class="spinner mx-auto mb-4"></div>
+                            <p class="text-gray-600 text-lg">Memuat data...</p>
+                        </div>
+                    </div>
+                `;
                 return;
             }
 
             app.innerHTML = `
-                ${renderNotification()}
-                ${renderHeader()}
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                    ${state.isAdmin ? renderAdminTabs() : ''}
-                    ${state.activeTab === 'published' || !state.isAdmin ? renderPublishedContent() : ''}
-                    ${state.isAdmin && state.activeTab === 'pending' ? renderPendingContent() : ''}
-                    ${state.isAdmin && state.activeTab === 'scraper' ? renderScraperContent() : ''}
-                </div>
-                ${renderFooter()}
-                ${state.showDeleteConfirm ? renderDeleteModal() : ''}
-                ${state.showApproveModal ? renderApproveModal() : ''}
-                ${state.showAddOldForm ? renderAddOldModal() : ''}
-                ${state.processingAction ? renderProcessingOverlay() : ''}
-            `;
-
-            attachEventListeners();
-        }
-
-        function renderLoading() {
-            return `
-                <div class="min-h-screen flex items-center justify-center">
-                    <div class="text-center">
-                        <div class="spinner mx-auto mb-4"></div>
-                        <p class="text-gray-600 text-lg">Memuat data dari GitHub...</p>
+                ${state.notification ? `
+                    <div class="fixed top-4 right-4 z-50 fade-in">
+                        <div class="border-l-4 p-4 rounded-lg shadow-xl max-w-md ${
+                            state.notification.type === 'success' ? 'bg-green-50 border-green-500 text-green-800' :
+                            state.notification.type === 'error' ? 'bg-red-50 border-red-500 text-red-800' :
+                            'bg-blue-50 border-blue-500 text-blue-800'
+                        }">
+                            <p class="font-medium">${state.notification.message}</p>
+                        </div>
                     </div>
-                </div>
-            `;
-        }
-
-        function renderNotification() {
-            if (!state.notification) return '';
-            
-            const colors = {
-                success: 'bg-green-50 border-green-500 text-green-800',
-                error: 'bg-red-50 border-red-500 text-red-800',
-                info: 'bg-blue-50 border-blue-500 text-blue-800'
-            };
-
-            return `
-                <div class="fixed top-4 right-4 z-50 fade-in">
-                    <div class="border-l-4 p-4 rounded-lg shadow-xl max-w-md ${colors[state.notification.type]}">
-                        <p class="font-medium">${state.notification.message}</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderProcessingOverlay() {
-            return `
-                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div class="bg-white rounded-xl p-8 text-center">
-                        <div class="spinner mx-auto mb-4"></div>
-                        <p class="text-gray-700 font-medium">Memproses... Mohon tunggu</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderHeader() {
-            return `
+                ` : ''}
+                
                 <header class="bg-gradient-to-r from-yellow-600 to-amber-600 text-white shadow-xl">
                     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-                        <div class="flex items-center justify-between">
+                        <div class="flex items-center justify-between flex-wrap gap-4">
                             <div class="flex items-center space-x-4">
                                 <div class="bg-white p-3 rounded-lg shadow-lg">
                                     <svg class="h-8 w-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -386,447 +369,255 @@
                                 </div>
                                 <div>
                                     <h1 class="text-3xl font-bold">Portal Peraturan ESDM, KLHK & Perda</h1>
-                                    <p class="text-yellow-100 text-sm mt-1">Auto-Update dengan GitHub Actions</p>
+                                    <p class="text-yellow-100 text-sm mt-1">Auto-Update • Advanced Configuration</p>
                                 </div>
                             </div>
-                            <div class="flex items-center space-x-3">
-                                ${state.isAdmin && state.pendingRegs.length > 0 ? `
-                                    <button onclick="setActiveTab('pending')" class="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-600 transition shadow-lg animate-pulse">
-                                        🔔 ${state.pendingRegs.length} Perlu Review
+                            <div class="flex items-center space-x-3 flex-wrap gap-2">
+                                ${!state.isAdmin ? `
+                                    <button onclick="toggleExportModal()" class="bg-white bg-opacity-20 text-white px-4 py-2 rounded-lg font-semibold hover:bg-opacity-30 transition">
+                                        📥 Export
                                     </button>
                                 ` : ''}
-                                <button onclick="toggleAdmin()" class="bg-white text-yellow-700 px-4 py-2 rounded-lg font-semibold hover:bg-yellow-50 transition shadow-lg">
-                                    ${state.isAdmin ? '👁️ Mode Publik' : '🔐 Mode Admin'}
+                                ${state.isAdmin && state.pendingRegs.length > 0 ? `
+                                    <button onclick="setActiveTab('pending')" class="bg-red-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-red-600 transition animate-pulse">
+                                        🔔 ${state.pendingRegs.length}
+                                    </button>
+                                ` : ''}
+                                ${state.isAdmin ? `
+                                    <button onclick="toggleConfigPanel()" class="bg-white bg-opacity-20 text-white px-4 py-2 rounded-lg font-semibold hover:bg-opacity-30 transition">
+                                        ⚙️ Config
+                                    </button>
+                                ` : ''}
+                                <button onclick="toggleAdmin()" class="bg-white text-yellow-700 px-4 py-2 rounded-lg font-semibold hover:bg-yellow-50 transition">
+                                    ${state.isAdmin ? '👁️ Publik' : '🔐 Admin'}
                                 </button>
                             </div>
                         </div>
                     </div>
                 </header>
-            `;
-        }
-
-        function renderAdminTabs() {
-            return `
-                <div class="mb-6 bg-white rounded-xl shadow-lg p-2 flex space-x-2">
-                    <button onclick="setActiveTab('published')" class="flex-1 px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'published' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
-                        ✓ Published (${state.regulations.length})
-                    </button>
-                    <button onclick="setActiveTab('pending')" class="flex-1 px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'pending' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
-                        ⏰ Pending Review (${state.pendingRegs.length})
-                    </button>
-                    <button onclick="setActiveTab('scraper')" class="flex-1 px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'scraper' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
-                        🤖 Auto-Scraper Status
-                    </button>
-                </div>
-            `;
-        }
-
-        function renderPublishedContent() {
-            return `
-                ${renderStats()}
-                ${renderFilters()}
-                ${state.isAdmin ? renderAdminActions() : ''}
-                ${renderRegulationsList(state.filteredRegs)}
-            `;
-        }
-
-        function renderAdminActions() {
-            return `
-                <div class="mb-6 bg-white rounded-xl shadow-lg p-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex space-x-3">
-                            <button onclick="toggleAddOldForm()" class="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition shadow-lg flex items-center space-x-2">
-                                <span>📝</span>
-                                <span>Tambah Peraturan Manual</span>
+                
+                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                    ${state.isAdmin ? `
+                        <div class="mb-6 bg-white rounded-xl shadow-lg p-2 flex space-x-2 overflow-x-auto">
+                            <button onclick="setActiveTab('published')" class="flex-1 min-w-max px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'published' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
+                                ✓ Published (${state.regulations.length})
                             </button>
-                            <button onclick="loadData()" class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition shadow-lg flex items-center space-x-2">
-                                <span>🔄</span>
-                                <span>Refresh Data</span>
+                            <button onclick="setActiveTab('pending')" class="flex-1 min-w-max px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'pending' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
+                                ⏰ Pending (${state.pendingRegs.length})
+                            </button>
+                            <button onclick="setActiveTab('config')" class="flex-1 min-w-max px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'config' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
+                                ⚙️ Konfigurasi
                             </button>
                         </div>
-                        <div class="text-sm text-gray-500">
-                            ${state.lastScrapedDate ? `Last update: ${formatDate(state.lastScrapedDate)}` : ''}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderStats() {
-            const esdmCount = state.regulations.filter(r => r.ministry === 'ESDM').length;
-            const klhkCount = state.regulations.filter(r => r.ministry === 'KLHK').length;
-            const perdaCount = state.regulations.filter(r => r.ministry === 'Perda').length;
-
-            return `
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-yellow-500">
-                        <p class="text-gray-500 text-sm font-medium">Total Peraturan</p>
-                        <p class="text-3xl font-bold text-gray-800 mt-1">${state.regulations.length}</p>
-                    </div>
-                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-600">
-                        <p class="text-gray-500 text-sm font-medium">ESDM</p>
-                        <p class="text-3xl font-bold text-gray-800 mt-1">${esdmCount}</p>
-                    </div>
-                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-600">
-                        <p class="text-gray-500 text-sm font-medium">KLHK</p>
-                        <p class="text-3xl font-bold text-gray-800 mt-1">${klhkCount}</p>
-                    </div>
-                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-purple-600">
-                        <p class="text-gray-500 text-sm font-medium">Perda</p>
-                        <p class="text-3xl font-bold text-gray-800 mt-1">${perdaCount}</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderFilters() {
-            return `
-                <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div class="md:col-span-2">
-                            <input type="text" id="searchInput" placeholder="🔍 Cari peraturan, nomor, atau kata kunci..." value="${state.searchTerm}" 
-                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition">
-                        </div>
-                        <div>
-                            <select id="ministrySelect" class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition">
-                                ${ministries.map(m => `<option value="${m}" ${m === state.selectedMinistry ? 'selected' : ''}>${m}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div>
-                            <select id="categorySelect" class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition">
-                                ${categories.map(c => `<option value="${c}" ${c === state.selectedCategory ? 'selected' : ''}>${c}</option>`).join('')}
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderRegulationsList(regulations) {
-            if (regulations.length === 0) {
-                return `
-                    <div class="bg-white rounded-xl shadow-lg p-12 text-center">
-                        <div class="text-6xl mb-4">📭</div>
-                        <p class="text-gray-500 text-lg">Tidak ada peraturan yang ditemukan</p>
-                    </div>
-                `;
-            }
-
-            return `
-                <div class="space-y-4">
-                    ${regulations.map(reg => `
-                        <div class="bg-white rounded-xl shadow-lg hover:shadow-2xl transition-all p-6 border-l-4 border-yellow-500 fade-in">
-                            <div class="flex items-start justify-between">
-                                <div class="flex-1">
-                                    <div class="flex items-center flex-wrap gap-2 mb-3">
-                                        <span class="text-2xl">${getCategoryIcon(reg.category)}</span>
-                                        <span class="px-3 py-1 rounded-full text-xs font-semibold border ${getMinistryColor(reg.ministry)}">${reg.ministry}</span>
-                                        <span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-300">${reg.category}</span>
-                                        ${reg.verified ? '<span class="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-300">✓ Verified</span>' : ''}
-                                        ${reg.source === 'manual' ? '<span class="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-300">📝 Manual</span>' : ''}
-                                    </div>
-                                    <h3 class="text-xl font-bold text-gray-800 mb-2 hover:text-yellow-700 transition">${reg.title}</h3>
-                                    <p class="text-sm font-semibold text-yellow-700 mb-3">${reg.number}</p>
-                                    <p class="text-gray-600 mb-4 leading-relaxed">${reg.summary}</p>
-                                    <div class="flex items-center flex-wrap gap-4 text-sm text-gray-500">
-                                        <span class="flex items-center gap-1">📅 ${formatDate(reg.date)}</span>
-                                        ${reg.link ? `<a href="${reg.link}" target="_blank" class="text-yellow-600 hover:text-yellow-700 font-medium flex items-center gap-1 hover:underline">📥 Lihat Dokumen</a>` : ''}
-                                    </div>
-                                </div>
-                                ${state.isAdmin ? `
-                                    <button onclick="deleteRegulation('${reg.id}')" class="ml-4 p-3 text-red-600 hover:bg-red-50 rounded-lg transition border border-red-200">
-                                        🗑️
-                                    </button>
-                                ` : ''}
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-
-        function renderPendingContent() {
-            if (state.pendingRegs.length === 0) {
-                return `
-                    <div class="bg-white rounded-xl shadow-lg p-12 text-center">
-                        <div class="text-6xl mb-4">✅</div>
-                        <p class="text-gray-500 text-lg">Tidak ada peraturan yang menunggu review</p>
-                    </div>
-                `;
-            }
-
-            return `
-                <div class="space-y-4">
-                    ${state.pendingRegs.map(reg => `
-                        <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-orange-500 fade-in">
-                            <div class="flex items-start justify-between">
-                                <div class="flex-1">
-                                    <div class="flex items-center flex-wrap gap-2 mb-3">
-                                        <span class="text-2xl">${getCategoryIcon(reg.category)}</span>
-                                        <span class="px-3 py-1 rounded-full text-xs font-semibold border ${getMinistryColor(reg.ministry)}">${reg.ministry}</span>
-                                        <span class="px-3 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-300">⏰ Pending</span>
-                                        <span class="text-xs text-gray-500">Auto-publish: ${formatDate(reg.autoPublishDate)}</span>
-                                    </div>
-                                    <h3 class="text-xl font-bold text-gray-800 mb-2">${reg.title}</h3>
-                                    <p class="text-sm font-semibold text-orange-700 mb-3">${reg.number}</p>
-                                    <p class="text-gray-600 mb-4">${reg.summary}</p>
-                                    <div class="flex items-center gap-4 text-sm text-gray-500">
-                                        <span>📅 ${formatDate(reg.date)}</span>
-                                        ${reg.link ? `<a href="${reg.link}" target="_blank" class="text-orange-600 hover:text-orange-700 font-medium">📥 Preview</a>` : ''}
-                                    </div>
-                                </div>
-                                <div class="ml-4 flex gap-2">
-                                    <button onclick="approveRegulation('${reg.id}')" class="p-3 bg-green-50 text-green-600 hover:bg-green-100 rounded-lg transition border border-green-200">
-                                        ✓ Approve
-                                    </button>
-                                    <button onclick="rejectRegulation('${reg.id}')" class="p-3 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition border border-red-200">
-                                        ✗ Reject
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-
-        function renderScraperContent() {
-            return `
-                <div class="bg-white rounded-xl shadow-lg p-8">
-                    <h2 class="text-2xl font-bold text-gray-800 mb-6">🤖 Status Auto-Scraper</h2>
+                    ` : ''}
                     
-                    <div class="space-y-6">
-                        <div class="border-l-4 border-blue-500 bg-blue-50 p-4 rounded">
-                            <h3 class="font-bold text-blue-800 mb-2">📋 JDIH ESDM & KLHK</h3>
-                            <p class="text-sm text-blue-700">Schedule: Setiap hari pukul 01:00 WIB</p>
-                            <p class="text-sm text-blue-600 mt-1">Last run: ${state.lastScrapedDate ? formatDate(state.lastScrapedDate) : 'Belum ada data'}</p>
-                        </div>
-
-                        <div class="border-l-4 border-purple-500 bg-purple-50 p-4 rounded">
-                            <h3 class="font-bold text-purple-800 mb-2">🏛️ Perda Scraper</h3>
-                            <p class="text-sm text-purple-700">Schedule: Setiap Minggu pukul 02:00 WIB</p>
-                            <p class="text-sm text-purple-600 mt-1">Target: Sulut, Kaltara, Kaltim, Papua, NTB</p>
-                        </div>
-
-                        <div class="bg-gray-50 p-6 rounded-lg">
-                            <h3 class="font-bold text-gray-800 mb-4">ℹ️ Cara Kerja Sistem</h3>
-                            <ol class="space-y-2 text-sm text-gray-700">
-                                <li class="flex gap-2"><span class="font-bold">1.</span> GitHub Actions menjalankan scraper otomatis sesuai jadwal</li>
-                                <li class="flex gap-2"><span class="font-bold">2.</span> Peraturan baru masuk ke status "Pending Review"</li>
-                                <li class="flex gap-2"><span class="font-bold">3.</span> Admin melakukan review dan approve/reject</li>
-                                <li class="flex gap-2"><span class="font-bold">4.</span> Peraturan yang di-approve akan muncul di halaman publik</li>
-                                <li class="flex gap-2"><span class="font-bold">5.</span> Semua perubahan otomatis tersimpan di GitHub repository</li>
-                            </ol>
-                        </div>
-
-                        <div class="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
-                            <h3 class="font-bold text-yellow-800 mb-2">⚠️ Catatan Penting</h3>
-                            <ul class="space-y-1 text-sm text-yellow-700">
-                                <li>• Workflow berjalan otomatis tanpa perlu token personal</li>
-                                <li>• Perubahan dari web interface memicu GitHub Actions</li>
-                                <li>• Tunggu 1-2 menit setelah action untuk melihat perubahan</li>
-                                <li>• Refresh halaman secara manual untuk update data terbaru</li>
-                            </ul>
-                        </div>
-
-                        <div class="text-center">
-                            <a href="https://github.com/${GITHUB_REPO}/actions" target="_blank" 
-                               class="inline-block bg-gray-800 text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-700 transition">
-                                🔗 Lihat GitHub Actions Log
-                            </a>
-                        </div>
-                    </div>
+                    <div id="content"></div>
                 </div>
-            `;
-        }
-
-        function renderDeleteModal() {
-            const reg = state.regulations.find(r => r.id === state.showDeleteConfirm);
-            if (!reg) return '';
-
-            return `
-                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onclick="cancelDelete()">
-                    <div class="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full fade-in" onclick="event.stopPropagation()">
-                        <div class="text-center mb-6">
-                            <div class="text-6xl mb-4">⚠️</div>
-                            <h3 class="text-2xl font-bold text-gray-800 mb-2">Konfirmasi Hapus</h3>
-                            <p class="text-gray-600">Yakin ingin menghapus peraturan ini?</p>
-                        </div>
-                        
-                        <div class="bg-gray-50 rounded-lg p-4 mb-6">
-                            <p class="text-sm font-semibold text-gray-700 mb-1">${reg.number}</p>
-                            <p class="text-sm text-gray-600">${reg.title}</p>
-                        </div>
-
-                        <div class="flex gap-3">
-                            <button onclick="confirmDelete()" class="flex-1 bg-red-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-red-700 transition shadow-lg">
-                                🗑️ Hapus
-                            </button>
-                            <button onclick="cancelDelete()" class="flex-1 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 transition">
-                                Batal
-                            </button>
-                        </div>
-
-                        <p class="text-xs text-gray-500 text-center mt-4">Perubahan akan diproses oleh GitHub Actions</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderApproveModal() {
-            const reg = state.pendingRegs.find(r => r.id === state.showApproveModal);
-            if (!reg) return '';
-
-            return `
-                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onclick="cancelApprove()">
-                    <div class="bg-white rounded-xl shadow-2xl p-8 max-w-2xl w-full fade-in" onclick="event.stopPropagation()">
-                        <div class="text-center mb-6">
-                            <div class="text-6xl mb-4">✅</div>
-                            <h3 class="text-2xl font-bold text-gray-800 mb-2">Approve Peraturan</h3>
-                            <p class="text-gray-600">Verifikasi informasi sebelum mempublikasikan</p>
-                        </div>
-                        
-                        <div class="bg-gray-50 rounded-lg p-6 mb-6 space-y-3">
-                            <div>
-                                <p class="text-xs text-gray-500 font-medium">Nomor Peraturan</p>
-                                <p class="text-sm font-semibold text-gray-800">${reg.number}</p>
-                            </div>
-                            <div>
-                                <p class="text-xs text-gray-500 font-medium">Judul</p>
-                                <p class="text-sm text-gray-700">${reg.title}</p>
-                            </div>
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <p class="text-xs text-gray-500 font-medium">Kementerian</p>
-                                    <span class="inline-block mt-1 px-2 py-1 rounded text-xs font-semibold ${getMinistryColor(reg.ministry)}">${reg.ministry}</span>
-                                </div>
-                                <div>
-                                    <p class="text-xs text-gray-500 font-medium">Kategori</p>
-                                    <span class="inline-block mt-1 px-2 py-1 rounded text-xs font-semibold bg-gray-200 text-gray-700">${reg.category}</span>
-                                </div>
-                            </div>
-                            <div>
-                                <p class="text-xs text-gray-500 font-medium">Tanggal</p>
-                                <p class="text-sm text-gray-700">${formatDate(reg.date)}</p>
-                            </div>
-                            ${reg.link ? `
-                                <div>
-                                    <p class="text-xs text-gray-500 font-medium">Link Dokumen</p>
-                                    <a href="${reg.link}" target="_blank" class="text-sm text-blue-600 hover:underline break-all">${reg.link}</a>
-                                </div>
-                            ` : ''}
-                        </div>
-
-                        <div class="flex gap-3">
-                            <button onclick="confirmApprove()" class="flex-1 bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition shadow-lg">
-                                ✓ Approve & Publish
-                            </button>
-                            <button onclick="cancelApprove()" class="flex-1 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 transition">
-                                Batal
-                            </button>
-                        </div>
-
-                        <p class="text-xs text-gray-500 text-center mt-4">Peraturan akan langsung muncul di halaman publik</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderAddOldModal() {
-            return `
-                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto p-4" onclick="toggleAddOldForm()">
-                    <div class="bg-white rounded-xl shadow-2xl p-8 max-w-3xl w-full my-8 fade-in" onclick="event.stopPropagation()">
-                        <h3 class="text-2xl font-bold text-gray-800 mb-6">📝 Tambah Peraturan Manual</h3>
-                        
-                        <form onsubmit="addOldRegulation(event)" class="space-y-5">
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Nomor Peraturan *</label>
-                                    <input type="text" name="number" required placeholder="Permen ESDM No. 7 Tahun 2024"
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Tanggal *</label>
-                                    <input type="date" name="date" required
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                                </div>
-                            </div>
-
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Kementerian *</label>
-                                    <select name="ministry" required
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                                        <option value="ESDM">ESDM</option>
-                                        <option value="KLHK">KLHK</option>
-                                        <option value="Perda">Perda</option>
-                                        <option value="Gabungan">Gabungan</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Kategori *</label>
-                                    <select name="category" required
-                                        class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                                        ${categories.filter(c => c !== 'Semua').map(c => `<option value="${c}">${c}</option>`).join('')}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">Judul Lengkap *</label>
-                                <input type="text" name="title" required placeholder="Peraturan Menteri ESDM tentang..."
-                                    class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">Ringkasan *</label>
-                                <textarea name="summary" rows="4" required placeholder="Ringkasan isi peraturan..."
-                                    class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent"></textarea>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">Link Dokumen</label>
-                                <input type="url" name="link" placeholder="https://jdih.esdm.go.id/..."
-                                    class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                                <select name="status"
-                                    class="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent">
-                                    <option value="Aktif">Aktif</option>
-                                    <option value="Dicabut">Dicabut</option>
-                                </select>
-                            </div>
-
-                            <div class="flex gap-3 pt-4">
-                                <button type="submit" class="flex-1 bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition shadow-lg">
-                                    💾 Simpan Peraturan
-                                </button>
-                                <button type="button" onclick="toggleAddOldForm()" class="flex-1 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-300 transition">
-                                    Batal
-                                </button>
-                            </div>
-                        </form>
-
-                        <p class="text-xs text-gray-500 text-center mt-4">* Field wajib diisi</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderFooter() {
-            return `
+                
                 <footer class="bg-gray-800 text-gray-300 mt-16">
-                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                        <div class="text-center">
-                            <p class="text-sm font-medium mb-2">Portal Peraturan ESDM, KLHK & Perda</p>
-                            <p class="text-xs text-gray-400">Auto-Update System Powered by GitHub Actions</p>
-                            <p class="text-xs text-gray-500 mt-2">© 2024 - Data disinkronisasi otomatis dari JDIH resmi</p>
-                        </div>
+                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-center">
+                        <p class="text-sm font-medium mb-2">Portal Peraturan ESDM, KLHK & Perda</p>
+                        <p class="text-xs text-gray-400">© 2024 - Advanced Configuration System</p>
                     </div>
                 </footer>
+                
+                ${state.showConfigPanel ? `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-end" onclick="toggleConfigPanel()">
+                        <div class="bg-white h-full w-full max-w-md overflow-y-auto slide-in" onclick="event.stopPropagation()">
+                            <div class="sticky top-0 bg-white border-b-2 p-6 flex justify-between">
+                                <h2 class="text-2xl font-bold">⚙️ Quick Config</h2>
+                                <button onclick="toggleConfigPanel()" class="p-2 hover:bg-gray-100 rounded-lg">✕</button>
+                            </div>
+                            <div class="p-6 space-y-6">
+                                <div>
+                                    <h3 class="font-bold mb-3">Display</h3>
+                                    <label class="flex justify-between mb-3">
+                                        <span class="text-sm">Stats</span>
+                                        <input type="checkbox" ${state.config.display.showStats ? 'checked' : ''} 
+                                            onchange="state.config.display.showStats = this.checked; saveConfig(); render()" class="w-5 h-5">
+                                    </label>
+                                    <label class="flex justify-between mb-3">
+                                        <span class="text-sm">Last Update</span>
+                                        <input type="checkbox" ${state.config.display.showLastUpdate ? 'checked' : ''} 
+                                            onchange="state.config.display.showLastUpdate = this.checked; saveConfig(); render()" class="w-5 h-5">
+                                    </label>
+                                    <label class="block">
+                                        <span class="text-sm">Items/Page: <b>${state.config.display.itemsPerPage}</b></span>
+                                        <input type="range" min="10" max="50" step="10" value="${state.config.display.itemsPerPage}" 
+                                            oninput="state.config.display.itemsPerPage = parseInt(this.value); saveConfig(); render()" class="w-full">
+                                    </label>
+                                </div>
+                                <button onclick="setActiveTab('config')" class="w-full bg-yellow-600 text-white px-6 py-3 rounded-lg font-semibold">
+                                    ⚙️ Full Config
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
+                
+                ${state.showExportModal ? `
+                    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onclick="toggleExportModal()">
+                        <div class="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full" onclick="event.stopPropagation()">
+                            <h3 class="text-2xl font-bold text-center mb-6">📥 Export Data</h3>
+                            <div class="space-y-3">
+                                <button onclick="exportToJSON(); toggleExportModal()" class="w-full bg-blue-600 text-white px-6 py-4 rounded-lg font-semibold hover:bg-blue-700">
+                                    Export JSON
+                                </button>
+                                <button onclick="exportToCSV(); toggleExportModal()" class="w-full bg-green-600 text-white px-6 py-4 rounded-lg font-semibold hover:bg-green-700">
+                                    Export CSV
+                                </button>
+                                <button onclick="exportToMarkdown(); toggleExportModal()" class="w-full bg-purple-600 text-white px-6 py-4 rounded-lg font-semibold hover:bg-purple-700">
+                                    Export Markdown
+                                </button>
+                            </div>
+                            <button onclick="toggleExportModal()" class="w-full mt-6 bg-gray-200 text-gray-700 px-6 py-3 rounded-lg font-semibold">
+                                Batal
+                            </button>
+                        </div>
+                    </div>
+                ` : ''}
             `;
+
+            renderContent();
+            attachEventListeners();
+        }
+
+        function renderContent() {
+            const content = document.getElementById('content');
+            if (!content) return;
+
+            if (state.activeTab === 'config' && state.isAdmin) {
+                content.innerHTML = `
+                    <div class="bg-white rounded-xl shadow-lg p-8">
+                        <h2 class="text-2xl font-bold mb-6">⚙️ Konfigurasi Lengkap</h2>
+                        <p class="text-gray-600 mb-6">Konfigurasi disimpan di browser Anda (localStorage)</p>
+                        
+                        <div class="space-y-4">
+                            <div class="border-2 border-blue-200 rounded-lg p-4">
+                                <h3 class="font-bold text-blue-800 mb-3">ESDM & KLHK Scraper</h3>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <label><span class="text-sm">Limit:</span>
+                                        <input type="number" value="${state.config.scraper.esdm_klhk.limit}" class="w-full px-3 py-2 border rounded" 
+                                            onchange="state.config.scraper.esdm_klhk.limit = parseInt(this.value); saveConfig()">
+                                    </label>
+                                    <label><span class="text-sm">Auto-publish (hari):</span>
+                                        <input type="number" value="${state.config.scraper.esdm_klhk.auto_publish_days}" class="w-full px-3 py-2 border rounded" 
+                                            onchange="state.config.scraper.esdm_klhk.auto_publish_days = parseInt(this.value); saveConfig()">
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div class="border-2 border-purple-200 rounded-lg p-4">
+                                <h3 class="font-bold text-purple-800 mb-3">Perda Scraper</h3>
+                                <label class="block mb-3"><span class="text-sm">Keywords:</span>
+                                    <input type="text" value="${state.config.scraper.perda.keywords}" class="w-full px-3 py-2 border rounded" 
+                                        onchange="state.config.scraper.perda.keywords = this.value; saveConfig()">
+                                </label>
+                                <div class="space-y-2">
+                                    ${state.config.scraper.perda.provinces.map((p, i) => `
+                                        <label class="flex items-center">
+                                            <input type="checkbox" ${p.enabled ? 'checked' : ''} class="mr-2"
+                                                onchange="state.config.scraper.perda.provinces[${i}].enabled = this.checked; saveConfig()">
+                                            <span class="text-sm">${p.name}</span>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
+                            
+                            <div class="flex gap-3">
+                                <button onclick="exportConfig()" class="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold">
+                                    📥 Export Config
+                                </button>
+                                <button onclick="resetConfig()" class="bg-red-600 text-white px-6 py-3 rounded-lg font-semibold">
+                                    🔄 Reset
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (state.activeTab === 'pending' && state.isAdmin) {
+                content.innerHTML = state.pendingRegs.length === 0 ? 
+                    '<div class="bg-white rounded-xl shadow-lg p-12 text-center"><div class="text-6xl mb-4">✅</div><p class="text-gray-500">Tidak ada pending</p></div>' :
+                    '<div class="space-y-4">' + state.pendingRegs.map(r => `<div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500"><h3 class="font-bold">${r.title}</h3><p class="text-sm text-gray-600 mt-2">${r.number}</p></div>`).join('') + '</div>';
+            } else {
+                content.innerHTML = `
+                    ${state.config.display.showStats ? `
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                            ${['Total', 'ESDM', 'KLHK', 'Perda'].map((label, i) => {
+                                const count = i === 0 ? state.regulations.length : state.regulations.filter(r => r.ministry === label).length;
+                                return `<div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-yellow-500">
+                                    <p class="text-sm text-gray-500">${label}</p>
+                                    <p class="text-3xl font-bold">${count}</p>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    ` : ''}
+                    
+                    <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <input type="text" id="searchInput" placeholder="🔍 Cari..." value="${state.searchTerm}" 
+                                class="md:col-span-2 px-4 py-3 border-2 rounded-lg">
+                            <select id="ministrySelect" class="px-4 py-3 border-2 rounded-lg">
+                                ${ministries.map(m => `<option ${m === state.selectedMinistry ? 'selected' : ''}>${m}</option>`).join('')}
+                            </select>
+                            <select id="categorySelect" class="px-4 py-3 border-2 rounded-lg">
+                                ${categories.map(c => `<option ${c === state.selectedCategory ? 'selected' : ''}>${c}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    
+                    ${state.isAdmin ? `
+                        <div class="mb-6 flex gap-3">
+                            <button onclick="loadData()" class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold">🔄 Refresh</button>
+                            <button onclick="toggleExportModal()" class="bg-purple-600 text-white px-6 py-3 rounded-lg font-semibold">📥 Export</button>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="space-y-4">
+                        ${getPaginatedData().length === 0 ? 
+                            '<div class="bg-white rounded-xl shadow-lg p-12 text-center"><div class="text-6xl mb-4">📭</div><p class="text-gray-500">Tidak ada data</p></div>' :
+                            getPaginatedData().map(reg => `
+                                <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-yellow-500 hover:shadow-xl transition">
+                                    <div class="flex justify-between">
+                                        <div class="flex-1">
+                                            <div class="flex gap-2 mb-3">
+                                                <span class="text-2xl">${getCategoryIcon(reg.category)}</span>
+                                                <span class="px-3 py-1 rounded-full text-xs font-semibold border ${getMinistryColor(reg.ministry)}">${reg.ministry}</span>
+                                                <span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100">${reg.category}</span>
+                                                ${reg.verified ? '<span class="px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">✓ Verified</span>' : ''}
+                                            </div>
+                                            <h3 class="text-xl font-bold text-gray-800 mb-2">${reg.title}</h3>
+                                            <p class="text-sm font-semibold text-yellow-700 mb-3">${reg.number}</p>
+                                            <p class="text-gray-600 mb-3">${reg.summary}</p>
+                                            <div class="flex gap-4 text-sm text-gray-500">
+                                                <span>📅 ${formatDate(reg.date)}</span>
+                                                ${reg.link ? `<a href="${reg.link}" target="_blank" class="text-yellow-600 hover:underline">📥 Lihat Dokumen</a>` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')
+                        }
+                    </div>
+                    
+                    ${getTotalPages() > 1 ? `
+                        <div class="mt-8 flex justify-center gap-2">
+                            <button onclick="changePage(${state.currentPage - 1})" ${state.currentPage === 1 ? 'disabled' : ''} 
+                                class="px-4 py-2 rounded-lg bg-white border-2 hover:bg-gray-50 disabled:opacity-50">← Prev</button>
+                            ${Array.from({length: Math.min(5, getTotalPages())}, (_, i) => {
+                                const page = i + 1;
+                                return `<button onclick="changePage(${page})" 
+                                    class="px-4 py-2 rounded-lg border-2 ${page === state.currentPage ? 'bg-yellow-600 text-white' : 'bg-white hover:bg-gray-50'}">${page}</button>`;
+                            }).join('')}
+                            <button onclick="changePage(${state.currentPage + 1})" ${state.currentPage === getTotalPages() ? 'disabled' : ''} 
+                                class="px-4 py-2 rounded-lg bg-white border-2 hover:bg-gray-50 disabled:opacity-50">Next →</button>
+                        </div>
+                        <div class="mt-4 text-center text-sm text-gray-600">
+                            Menampilkan ${((state.currentPage - 1) * state.config.display.itemsPerPage) + 1} - ${Math.min(state.currentPage * state.config.display.itemsPerPage, state.filteredRegs.length)} dari ${state.filteredRegs.length}
+                        </div>
+                    ` : ''}
+                `;
+            }
         }
 
         function attachEventListeners() {
@@ -837,6 +628,7 @@
             if (searchInput) {
                 searchInput.addEventListener('input', (e) => {
                     state.searchTerm = e.target.value;
+                    state.currentPage = 1;
                     filterRegulations();
                     render();
                 });
@@ -845,6 +637,7 @@
             if (ministrySelect) {
                 ministrySelect.addEventListener('change', (e) => {
                     state.selectedMinistry = e.target.value;
+                    state.currentPage = 1;
                     filterRegulations();
                     render();
                 });
@@ -853,6 +646,7 @@
             if (categorySelect) {
                 categorySelect.addEventListener('change', (e) => {
                     state.selectedCategory = e.target.value;
+                    state.currentPage = 1;
                     filterRegulations();
                     render();
                 });
@@ -860,6 +654,7 @@
         }
 
         // Initialize
+        loadConfig();
         loadData();
     </script>
 </body>
