@@ -1,8 +1,8 @@
-name: Auto-Scraper JDIH
+name: Auto-Scraper JDIH v2 (Config-Aware)
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 1 * * *'  # Daily at 01:00 UTC (08:00 WIB)
   workflow_dispatch:
 
 permissions:
@@ -27,9 +27,20 @@ jobs:
       run: |
         pip install requests beautifulsoup4 lxml
     
-    - name: Run scraper
+    - name: Check configuration
       run: |
-        python .scripts/scraper.py
+        echo "📋 Checking configuration..."
+        if [ -f config.json ]; then
+          echo "✅ config.json found"
+          cat config.json | python -m json.tool | head -20
+        else
+          echo "⚠️  config.json not found, will use default config"
+        fi
+    
+    - name: Run scraper v2
+      run: |
+        echo "🤖 Starting config-aware scraper..."
+        python .scripts/scraper_v2.py
     
     - name: Configure Git
       run: |
@@ -44,8 +55,20 @@ jobs:
       run: |
         git add -A
         if git diff --staged --quiet; then
-          echo "No changes to commit"
+          echo "✅ No changes to commit"
         else
           git commit -m "Auto-update regulations $(date -u +'%Y-%m-%d %H:%M:%S')" || true
           git push origin main || (git pull --rebase origin main && git push origin main)
         fi
+    
+    - name: Summary
+      run: |
+        echo "="
+        echo "📊 Scraping Summary:"
+        if [ -f regulations.json ]; then
+          PUBLISHED=$(cat regulations.json | python -c "import sys, json; data=json.load(sys.stdin); print(len(data.get('published', [])))")
+          PENDING=$(cat regulations.json | python -c "import sys, json; data=json.load(sys.stdin); print(len(data.get('pending', [])))")
+          echo "   Published: $PUBLISHED"
+          echo "   Pending: $PENDING"
+        fi
+        echo "="
