@@ -1,8 +1,8 @@
-name: Scraper Perda
+name: Scraper Perda v2 (SULUT & KALTARA Fixed)
 
 on:
   schedule:
-    - cron: '0 2 * * 0'
+    - cron: '0 2 * * 0'  # Weekly on Sunday at 02:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -27,9 +27,21 @@ jobs:
       run: |
         pip install requests beautifulsoup4 lxml
     
-    - name: Run Perda scraper
+    - name: Check configuration
       run: |
-        python .scripts/scraper_perda.py
+        echo "📋 Checking Perda configuration..."
+        if [ -f config.json ]; then
+          echo "✅ config.json found"
+          echo "Keywords:"
+          cat config.json | python -c "import sys, json; data=json.load(sys.stdin); print(', '.join(data.get('scraper', {}).get('perda', {}).get('keywords', [])))"
+        else
+          echo "⚠️  config.json not found, will use default config"
+        fi
+    
+    - name: Run Perda scraper v2
+      run: |
+        echo "🏛️ Starting Perda scraper (SULUT & KALTARA)..."
+        python .scripts/scraper_perda_v2.py
     
     - name: Configure Git
       run: |
@@ -44,8 +56,18 @@ jobs:
       run: |
         git add -A
         if git diff --staged --quiet; then
-          echo "No changes to commit"
+          echo "✅ No changes to commit"
         else
           git commit -m "Auto-update Perda $(date -u +'%Y-%m-%d %H:%M:%S')" || true
           git push origin main || (git pull --rebase origin main && git push origin main)
         fi
+    
+    - name: Summary
+      run: |
+        echo "="
+        echo "📊 Perda Scraping Summary:"
+        if [ -f regulations.json ]; then
+          PERDA_COUNT=$(cat regulations.json | python -c "import sys, json; data=json.load(sys.stdin); print(len([r for r in data.get('pending', []) if r.get('ministry') == 'Perda']))")
+          echo "   New Perda in pending: $PERDA_COUNT"
+        fi
+        echo "="
