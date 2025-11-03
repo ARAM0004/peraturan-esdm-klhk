@@ -1,22 +1,90 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Perda Scraper v2 - Config-Aware
+FIXED untuk Sulawesi Utara dan Kalimantan Utara
+Membaca keywords dari config.json
+"""
 
 import requests
 from bs4 import BeautifulSoup
 import json
 from datetime import datetime, timedelta
 import time
+import re
+from pathlib import Path
 
-class PerdaScraper:
+class PerdaScraperV2:
     def __init__(self):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         self.results = []
+        self.config = self.load_config()
         
-    def scrape_provinsi(self, url, provinsi, filter_keyword=None):
-        """Scrape perda dari JDIH provinsi"""
-        print("Scraping {} ({})...".format(provinsi, url))
+    def load_config(self):
+        """Load configuration dari config.json"""
+        config_path = Path("config.json")
+        
+        if not config_path.exists():
+            print("⚠️  config.json tidak ditemukan, menggunakan default")
+            return self.get_default_config()
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                print("✅ Config loaded successfully")
+                return config
+        except Exception as e:
+            print(f"❌ Error loading config: {e}")
+            return self.get_default_config()
+    
+    def get_default_config(self):
+        """Default configuration"""
+        return {
+            "scraper": {
+                "perda": {
+                    "enabled": True,
+                    "keywords": ["pertambangan", "tambang", "mineral"],
+                    "provinces": [
+                        {
+                            "name": "Sulawesi Utara",
+                            "code": "SULUT",
+                            "url": "https://jdih.sulutprov.go.id/",
+                            "enabled": True
+                        },
+                        {
+                            "name": "Kalimantan Utara",
+                            "code": "KALTARA",
+                            "url": "https://jdih.kaltaraprov.go.id/",
+                            "enabled": True
+                        }
+                    ],
+                    "limit": 20
+                }
+            },
+            "general": {
+                "auto_publish_days": 7
+            }
+        }
+    
+    def matches_keywords(self, text, keywords):
+        """Check if text contains any of the keywords"""
+        if not keywords:  # Jika keywords kosong, ambil semua
+            return True
+        
+        text_lower = text.lower()
+        return any(keyword.lower() in text_lower for keyword in keywords)
+    
+    def scrape_provinsi(self, url, provinsi_name, provinsi_code):
+        """Scrape perda dari JDIH provinsi dengan filter keywords"""
+        config = self.config['scraper'].get('perda', {})
+        keywords = config.get('keywords', [])
+        limit = config.get('limit', 20)
+        
+        print(f"\n🔍 Scraping {provinsi_name} ({url})")
+        print(f"   Keywords: {', '.join(keywords) if keywords else 'ALL'}")
+        print(f"   Limit: {limit}")
         
         try:
             response = requests.get(url, headers=self.headers, timeout=15)
@@ -24,7 +92,7 @@ class PerdaScraper:
             
             soup = BeautifulSoup(response.content, 'lxml')
             
-            # Try multiple selectors (different JDIH sites use different structures)
+            # Try multiple selectors
             selectors = [
                 '.card-body',
                 '.panel-body',
@@ -41,25 +109,26 @@ class PerdaScraper:
                 found = soup.select(selector)
                 if found:
                     cards = found
-                    print("  Found {} items with selector: {}".format(len(found), selector))
+                    print(f"   Found {len(found)} items with selector: {selector}")
                     break
             
             if not cards:
-                print("  No items found with any selector")
+                print("   ⚠️  No items found")
                 return
             
             count = 0
-            for card in cards[:20]:  # Limit 20 per province
+            for card in cards:
+                if count >= limit:
+                    break
+                
                 try:
                     title = card.get_text(strip=True)
                     if not title or len(title) < 10:
                         continue
                     
-                    # Filter berdasarkan keyword
-                    if filter_keyword:
-                        keywords = filter_keyword.lower().split(',')
-                        if not any(kw.strip() in title.lower() for kw in keywords):
-                            continue
+                    # Filter by keywords
+                    if not self.matches_keywords(title, keywords):
+                        continue
                     
                     # Extract link
                     link = card.find('a')
@@ -69,45 +138,50 @@ class PerdaScraper:
                         base_url = url.rstrip('/')
                         href = base_url + '/' + href.lstrip('/')
                     
-                    # Extract number if possible
-                    import re
-                    number_match = re.search(r'(Perda|Peraturan Daerah).*?No\.?\s*(\d+)', title, re.IGNORECASE)
+                    # Extract number
+                    number_match = re.search(r'(Perda|Peraturan Daerah).*?No\.?\s*(\d+.*?Tahun\s+\d{4})', title, re.IGNORECASE)
                     if number_match:
                         number = number_match.group(0)
                     else:
-                        number = "{} No. {}".format(provinsi, count + 1)
+                        number = f"Perda {provinsi_code} No. {count + 1}"
+                    
+                    # Extract year
+                    year_match = re.search(r'Tahun\s+(\d{4})', title)
+                    year = year_match.group(1) if year_match else str(datetime.now().year)
                     
                     regulation = {
-                        'id': 'perda-{}-{}'.format(provinsi.lower().replace(' ', '-'), int(time.time() * 1000)),
-                        'title': title[:200],  # Limit title length
+                        'id': f'perda-{provinsi_code.lower()}-{int(time.time() * 1000)}',
+                        'title': title[:300],  # Limit title length
                         'number': number,
                         'ministry': 'Perda',
                         'category': self.categorize(title),
-                        'date': datetime.now().strftime('%Y-%m-%d'),
-                        'summary': 'Peraturan Daerah {} tentang {}'.format(provinsi, title[:100]),
+                        'date': f'{year}-01-01',
+                        'summary': f'Peraturan Daerah {provinsi_name} tentang {title[:100]}',
                         'link': href or url,
                         'status': 'Aktif',
-                        'provinsi': provinsi,
+                        'provinsi': provinsi_name,
+                        'provinsi_code': provinsi_code,
                         'scrapedDate': datetime.now().isoformat(),
                         'autoPublishDate': self.get_auto_publish_date(),
-                        'verified': False
+                        'verified': False,
+                        'keywords_matched': [kw for kw in keywords if kw.lower() in title.lower()]
                     }
                     
                     self.results.append(regulation)
                     count += 1
-                    print("  + {}".format(number))
-                    time.sleep(0.3)  # Be polite
+                    print(f"   ✓ [{count}/{limit}] {number}")
+                    time.sleep(0.3)
                     
                 except Exception as e:
                     continue
             
-            print("  Total found: {}".format(count))
+            print(f"   Total scraped: {count}")
                     
         except Exception as e:
-            print("  ERROR scraping {}: {}".format(provinsi, e))
+            print(f"   ❌ Error: {e}")
     
     def categorize(self, title):
-        """Auto-categorize berdasarkan keywords"""
+        """Auto-categorize"""
         title_lower = title.lower()
         
         if any(word in title_lower for word in ['tambang', 'pertambangan', 'mineral', 'galian']):
@@ -120,7 +194,9 @@ class PerdaScraper:
             return 'Perda'
     
     def get_auto_publish_date(self):
-        auto_date = datetime.now() + timedelta(days=7)
+        """Get auto-publish date dari config"""
+        days = self.config.get('general', {}).get('auto_publish_days', 7)
+        auto_date = datetime.now() + timedelta(days=days)
         return auto_date.isoformat()
     
     def remove_duplicates(self, existing_data):
@@ -159,49 +235,56 @@ class PerdaScraper:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
             
             print("\n" + "="*60)
-            print("Scraping complete!")
-            print("Total new Perda found: {}".format(len(new_regulations)))
-            print("Saved to: {}".format(filename))
+            print("✅ Scraping complete!")
+            print(f"📊 Total new Perda: {len(new_regulations)}")
+            print(f"💾 Saved to: {filename}")
             print("="*60)
             
             return len(new_regulations)
             
         except Exception as e:
-            print("ERROR saving: {}".format(e))
+            print(f"❌ Error saving: {e}")
             return 0
 
 def main():
     print("="*60)
-    print("SCRAPER PERDA - Peraturan Daerah")
+    print("🏛️  PERDA SCRAPER v2.0 - Config-Aware")
+    print("   FIXED: Sulawesi Utara & Kalimantan Utara")
     print("="*60)
-    print("Started at: {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    print(f"⏰ Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Filter keyword (ubah sesuai kebutuhan)
-    filter_keyword = "pertambangan,tambang,mineral"  # Multiple keywords dipisah koma
-    # Set None untuk tanpa filter
+    scraper = PerdaScraperV2()
     
-    scraper = PerdaScraper()
+    # Get config
+    perda_config = scraper.config['scraper'].get('perda', {})
     
-    # Daftar JDIH Provinsi (tambahkan sesuai kebutuhan)
+    if not perda_config.get('enabled', True):
+        print("⏸️  Perda scraper disabled in config")
+        return
+    
+    # Display config
+    print("📋 Configuration:")
+    print(f"   Keywords: {', '.join(perda_config.get('keywords', []))}")
+    print(f"   Limit: {perda_config.get('limit', 20)} per province")
+    print()
+    
+    # FIXED: Always scrape SULUT and KALTARA
     provinces = [
-        ("https://jdih.sulutprov.go.id/", "Sulawesi Utara"),
-        ("https://jdih.kaltaraprov.go.id/", "Kalimantan Utara"),
-        ("https://jdih.kaltimprov.go.id/", "Kalimantan Timur"),
-        ("https://jdih.papua.go.id/", "Papua"),
-        ("https://jdih.ntbprov.go.id/", "Nusa Tenggara Barat"),
+        ("https://jdih.sulutprov.go.id/", "Sulawesi Utara", "SULUT"),
+        ("https://jdih.kaltaraprov.go.id/", "Kalimantan Utara", "KALTARA")
     ]
     
-    for url, provinsi in provinces:
-        scraper.scrape_provinsi(url, provinsi, filter_keyword)
-        print()
+    # Scrape each province
+    for url, name, code in provinces:
+        scraper.scrape_provinsi(url, name, code)
+        time.sleep(1)  # Delay between provinces
     
+    # Save results
     new_count = scraper.save_results('regulations.json')
     
     print()
-    print("Done! Found {} new Perda regulations".format(new_count))
-    if filter_keyword:
-        print("(filtered by: '{}')".format(filter_keyword))
+    print(f"🎉 Done! Found {new_count} new Perda regulations")
 
 if __name__ == "__main__":
     main()
