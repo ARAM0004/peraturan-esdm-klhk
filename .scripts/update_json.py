@@ -1,115 +1,112 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Update Config Handler
-Membaca trigger/config_update.json dan update config.json
+Enhanced update script untuk menangani berbagai aksi dari web interface
+Mendukung: approve, delete, add_manual
 """
 
 import json
 from pathlib import Path
 from datetime import datetime
 
+def load_json(path):
+    """Load JSON file dengan error handling"""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"❌ File {path} tidak ditemukan")
+        return None
+    except json.JSONDecodeError:
+        print(f"❌ Error parsing JSON di {path}")
+        return None
+
+def save_json(path, data):
+    """Save JSON file dengan formatting"""
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
 def main():
-    trigger_path = Path("trigger/config_update.json")
-    config_path = Path("config.json")
-    
-    # Check trigger exists
+    trigger_path = Path("trigger/update.json")
+    data_path = Path("regulations.json")
+
+    # Check trigger file exists
     if not trigger_path.exists():
-        print("ℹ️  No config update trigger found")
+        print("ℹ️ Tidak ada file trigger, workflow berhenti.")
         return
-    
+
     # Load trigger
-    try:
-        with open(trigger_path, 'r', encoding='utf-8') as f:
-            trigger = json.load(f)
-    except Exception as e:
-        print(f"❌ Error loading trigger: {e}")
+    trigger = load_json(trigger_path)
+    if not trigger:
         return
+
+    # Load main data
+    regulations_data = load_json(data_path)
+    if not regulations_data:
+        regulations_data = {
+            'published': [],
+            'pending': [],
+            'lastUpdated': ''
+        }
+
+    # Process action
+    action = trigger.get('action', 'delete')  # default untuk backward compatibility
     
-    # Check if trigger is empty
-    if not trigger or trigger.get('action') != 'update_config':
-        print("ℹ️  Empty trigger, skipping")
-        trigger_path.unlink(missing_ok=True)
-        return
-    
-    print("="*60)
-    print("🔧 UPDATING CONFIGURATION")
-    print("="*60)
-    
-    # Load current config
-    try:
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        else:
-            print("⚠️  config.json not found, creating new one")
-            config = {
-                "scraper": {
-                    "esdm": {},
-                    "klhk": {},
-                    "perda": {}
-                },
-                "general": {}
-            }
-    except Exception as e:
-        print(f"❌ Error loading config: {e}")
-        return
-    
-    # Apply updates
-    new_config = trigger.get('config', {})
-    
-    if not new_config:
-        print("⚠️  No config data in trigger")
-        return
-    
-    print("\n📝 Applying updates:")
-    
-    # Update ESDM config
-    if 'esdm' in new_config:
-        for key, value in new_config['esdm'].items():
-            config['scraper']['esdm'][key] = value
-            print(f"   ESDM.{key} = {value}")
-    
-    # Update KLHK config
-    if 'klhk' in new_config:
-        for key, value in new_config['klhk'].items():
-            config['scraper']['klhk'][key] = value
-            print(f"   KLHK.{key} = {value}")
-    
-    # Update Perda config
-    if 'perda' in new_config:
-        for key, value in new_config['perda'].items():
-            config['scraper']['perda'][key] = value
-            print(f"   Perda.{key} = {value}")
-    
-    # Update general config
-    if 'general' in new_config:
-        for key, value in new_config['general'].items():
-            config['general'][key] = value
-            print(f"   General.{key} = {value}")
-    
-    # Add metadata
-    config['last_updated'] = datetime.now().isoformat()
-    config['updated_by'] = trigger.get('updated_by', 'web_interface')
-    
-    # Save updated config
-    try:
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        print("\n✅ Config updated successfully")
-        print(f"💾 Saved to: {config_path}")
-    except Exception as e:
-        print(f"\n❌ Error saving config: {e}")
-        return
-    
-    # Clear trigger
+    print(f"🔄 Processing action: {action}")
+
+    if action == 'approve':
+        # Move regulation from pending to published
+        reg_id = trigger.get('regulation_id')
+        if reg_id:
+            for i, reg in enumerate(regulations_data['pending']):
+                if reg['id'] == reg_id:
+                    approved_reg = regulations_data['pending'].pop(i)
+                    approved_reg['verified'] = True
+                    approved_reg['publishedDate'] = datetime.now().isoformat()
+                    regulations_data['published'].insert(0, approved_reg)
+                    print(f"✅ Approved: {approved_reg['number']}")
+                    break
+
+    elif action == 'add_manual':
+        # Add manual regulation
+        new_reg = trigger.get('regulation')
+        if new_reg:
+            regulations_data['published'].insert(0, new_reg)
+            print(f"✅ Added manual regulation: {new_reg['number']}")
+
+    elif action == 'delete' or trigger.get('delete_id'):
+        # Delete regulation (support old and new format)
+        delete_id = trigger.get('delete_id') or trigger.get('regulation_id')
+        if delete_id:
+            # Try to delete from published
+            initial_count = len(regulations_data['published'])
+            regulations_data['published'] = [
+                r for r in regulations_data['published'] 
+                if r.get('id') != delete_id
+            ]
+            
+            if len(regulations_data['published']) < initial_count:
+                print(f"🗑️ Deleted regulation ID: {delete_id}")
+            
+            # Also try to delete from pending
+            regulations_data['pending'] = [
+                r for r in regulations_data['pending'] 
+                if r.get('id') != delete_id
+            ]
+
+    # Update timestamp
+    regulations_data['lastUpdated'] = trigger.get('timestamp', datetime.now().isoformat())
+
+    # Save updated data
+    save_json(data_path, regulations_data)
+    print("✅ regulations.json berhasil diperbarui")
+
+    # Clear trigger file
     try:
         trigger_path.unlink()
-        print("🧹 Trigger file cleaned")
+        print("🧹 Trigger file dibersihkan")
     except Exception as e:
-        print(f"⚠️  Could not delete trigger: {e}")
-    
-    print("="*60)
+        print(f"⚠️ Warning: Tidak bisa menghapus trigger file: {e}")
 
 if __name__ == "__main__":
     main()
