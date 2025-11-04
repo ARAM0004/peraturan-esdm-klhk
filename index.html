@@ -38,9 +38,18 @@
     <div id="app"></div>
 
     <script>
+        // GITHUB CONFIG - PASTIKAN INI BENAR!
         const GITHUB_REPO = "ARAM0004/peraturan-esdm-klhk";
         const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}`;
         const RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main`;
+
+        // Debug mode
+        const DEBUG = true;
+        function log(msg, data = null) {
+            if (DEBUG) {
+                console.log(`[DEBUG] ${msg}`, data || '');
+            }
+        }
 
         const DEFAULT_CONFIG = {
             scraper: {
@@ -51,11 +60,11 @@
                     auto_publish_days: 7,
                     esdm: {
                         keywords: ['pertambangan', 'mineral', 'batubara', 'tambang'],
-                        types: ['Peraturan Menteri', 'Keputusan Menteri', 'Peraturan Pemerintah', 'Undang-Undang']
+                        types: ['Peraturan Menteri', 'Keputusan Menteri']
                     },
                     klhk: {
                         keywords: ['pertambangan', 'lingkungan', 'kehutanan', 'reklamasi', 'amdal'],
-                        types: ['Peraturan Menteri', 'Keputusan Menteri', 'Peraturan Pemerintah', 'Undang-Undang']
+                        types: ['Peraturan Menteri', 'Keputusan Menteri']
                     }
                 },
                 perda: {
@@ -93,12 +102,9 @@
             isAdmin: false,
             activeTab: 'published',
             loading: true,
+            loadingError: null,
             lastScrapedDate: null,
-            showAddOldForm: false,
-            showDeleteConfirm: null,
-            showApproveModal: null,
             showConfigPanel: false,
-            showExportModal: false,
             processingAction: false,
             notification: null,
             config: { ...DEFAULT_CONFIG },
@@ -110,6 +116,7 @@
 
         // Notification System
         function showNotification(message, type = 'info') {
+            log('Notification:', { message, type });
             state.notification = { message, type };
             render();
             setTimeout(() => {
@@ -120,21 +127,42 @@
 
         // Load data from GitHub
         async function loadData() {
+            log('Starting loadData...');
             try {
-                const response = await fetch(`${RAW_URL}/regulations.json?t=${Date.now()}`);
-                if (!response.ok) throw new Error('Failed to fetch');
+                const url = `${RAW_URL}/regulations.json?t=${Date.now()}`;
+                log('Fetching from:', url);
                 
-                const data = await response.json();
+                const response = await fetch(url);
+                log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const text = await response.text();
+                log('Response length:', text.length);
+                
+                const data = JSON.parse(text);
+                log('Parsed data:', {
+                    published: data.published?.length || 0,
+                    pending: data.pending?.length || 0
+                });
+                
                 state.regulations = data.published || [];
                 state.pendingRegs = data.pending || [];
                 state.lastScrapedDate = data.lastUpdated;
                 
                 showNotification('✅ Data berhasil dimuat', 'success');
+                log('Data loaded successfully');
+                
             } catch (error) {
+                log('Error loading data:', error);
                 console.error('Error loading data:', error);
-                showNotification('⚠️ Gagal memuat data dari GitHub', 'error');
+                state.loadingError = error.message;
+                showNotification('⚠️ Gagal memuat data: ' + error.message, 'error');
             } finally {
                 state.loading = false;
+                log('Loading complete, filtering...');
                 filterRegulations();
                 render();
             }
@@ -142,16 +170,24 @@
 
         // Load config from GitHub
         async function loadConfig() {
+            log('Starting loadConfig...');
             try {
-                const response = await fetch(`${RAW_URL}/config.json?t=${Date.now()}`);
+                const url = `${RAW_URL}/config.json?t=${Date.now()}`;
+                log('Fetching config from:', url);
+                
+                const response = await fetch(url);
+                log('Config response status:', response.status);
+                
                 if (response.ok) {
-                    state.config = await response.json();
-                    console.log('✅ Config loaded from GitHub');
+                    const text = await response.text();
+                    state.config = JSON.parse(text);
+                    log('Config loaded:', state.config);
                 } else {
+                    log('Config not found, using default');
                     state.config = { ...DEFAULT_CONFIG };
-                    console.log('⚠️ Using default config');
                 }
             } catch (error) {
+                log('Error loading config:', error);
                 console.error('Error loading config:', error);
                 state.config = { ...DEFAULT_CONFIG };
             }
@@ -198,6 +234,7 @@
         }
 
         function filterRegulations() {
+            log('Filtering regulations...');
             let filtered = state.regulations;
 
             if (state.selectedMinistry !== 'Semua') {
@@ -218,6 +255,7 @@
             }
 
             state.filteredRegs = filtered;
+            log('Filtered results:', filtered.length);
         }
 
         // Helper Functions
@@ -246,8 +284,12 @@
         }
 
         function formatDate(dateStr) {
-            const date = new Date(dateStr);
-            return date.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' });
+            } catch (e) {
+                return dateStr;
+            }
         }
 
         function toggleAdmin() {
@@ -287,10 +329,16 @@
 
         // Render Functions
         function render() {
+            log('Rendering, loading:', state.loading);
             const app = document.getElementById('app');
             
             if (state.loading) {
                 app.innerHTML = renderLoading();
+                return;
+            }
+
+            if (state.loadingError) {
+                app.innerHTML = renderError();
                 return;
             }
 
@@ -314,7 +362,59 @@
                 <div class="min-h-screen flex items-center justify-center">
                     <div class="text-center">
                         <div class="spinner mx-auto mb-4"></div>
-                        <p class="text-gray-600 text-lg">Memuat data dari GitHub...</p>
+                        <p class="text-gray-600 text-lg mb-2">Memuat data dari GitHub...</p>
+                        <p class="text-gray-500 text-sm">Repo: ${GITHUB_REPO}</p>
+                        ${DEBUG ? `
+                            <div class="mt-4 p-4 bg-gray-100 rounded-lg text-left text-xs max-w-md mx-auto">
+                                <p class="font-bold mb-2">Debug Info:</p>
+                                <p>API URL: ${GITHUB_API}</p>
+                                <p>RAW URL: ${RAW_URL}</p>
+                                <p class="mt-2 text-red-600">Check console (F12) untuk detail error</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderError() {
+            return `
+                <div class="min-h-screen flex items-center justify-center p-4">
+                    <div class="text-center max-w-2xl">
+                        <div class="text-6xl mb-4">❌</div>
+                        <h1 class="text-2xl font-bold text-gray-800 mb-4">Gagal Memuat Data</h1>
+                        <p class="text-gray-600 mb-4">${state.loadingError}</p>
+                        
+                        <div class="bg-red-50 border-2 border-red-200 rounded-lg p-6 text-left mb-6">
+                            <p class="font-bold text-red-800 mb-2">Kemungkinan Penyebab:</p>
+                            <ul class="text-sm text-red-700 space-y-1">
+                                <li>• File regulations.json tidak ditemukan di repo</li>
+                                <li>• Format JSON tidak valid</li>
+                                <li>• Repository name salah: "${GITHUB_REPO}"</li>
+                                <li>• Repository bersifat private</li>
+                                <li>• Koneksi internet bermasalah</li>
+                            </ul>
+                        </div>
+
+                        <div class="space-y-3">
+                            <button onclick="location.reload()" 
+                                class="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
+                                🔄 Coba Lagi
+                            </button>
+                            <p class="text-sm text-gray-500">atau</p>
+                            <a href="https://github.com/${GITHUB_REPO}/blob/main/regulations.json" target="_blank"
+                                class="inline-block bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-700 transition">
+                                📂 Cek File di GitHub
+                            </a>
+                        </div>
+
+                        ${DEBUG ? `
+                            <div class="mt-6 p-4 bg-gray-100 rounded-lg text-left text-xs">
+                                <p class="font-bold mb-2">Debug Info:</p>
+                                <p>Expected URL: ${RAW_URL}/regulations.json</p>
+                                <p class="mt-2 text-red-600">Buka Console (F12) untuk detail lengkap</p>
+                            </div>
+                        ` : ''}
                     </div>
                 </div>
             `;
@@ -389,7 +489,7 @@
                         ✓ Published (${state.regulations.length})
                     </button>
                     <button onclick="setActiveTab('config')" class="flex-1 min-w-max px-6 py-3 rounded-lg font-semibold transition ${state.activeTab === 'config' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
-                        ⚙️ Konfigurasi Scraper
+                        ⚙️ Konfigurasi
                     </button>
                 </div>
             `;
@@ -467,7 +567,7 @@
             }
 
             return `
-                <div class="mt-8 flex justify-center items-center gap-2">
+                <div class="mt-8 flex justify-center items-center gap-2 flex-wrap">
                     <button onclick="changePage(${state.currentPage - 1})" ${state.currentPage === 1 ? 'disabled' : ''} 
                         class="px-4 py-2 rounded-lg bg-white border-2 border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition">
                         ← Prev
@@ -540,155 +640,77 @@
 
         function renderConfigContent() {
             return `
-                <div class="space-y-6">
-                    <!-- ESDM/KLHK Config -->
-                    <div class="bg-white rounded-xl shadow-lg p-8">
-                        <h2 class="text-2xl font-bold text-gray-800 mb-6">⚙️ Konfigurasi JDIH ESDM & KLHK</h2>
-                        
-                        <div class="space-y-6">
-                            <!-- ESDM -->
-                            <div class="border-2 border-blue-200 rounded-lg p-6">
-                                <h3 class="text-lg font-bold text-blue-800 mb-4">JDIH ESDM</h3>
-                                <div class="grid grid-cols-1 gap-4">
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
-                                        <input type="text" value="${state.config.scraper.esdm_klhk.esdm.keywords.join(', ')}" 
-                                            onchange="state.config.scraper.esdm_klhk.esdm.keywords = this.value.split(',').map(s => s.trim())"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                        <p class="text-xs text-gray-500 mt-1">Contoh: pertambangan, mineral, batubara</p>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Peraturan (pisahkan dengan koma)</label>
-                                        <input type="text" value="${state.config.scraper.esdm_klhk.esdm.types.join(', ')}" 
-                                            onchange="state.config.scraper.esdm_klhk.esdm.types = this.value.split(',').map(s => s.trim())"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                        <p class="text-xs text-gray-500 mt-1">Contoh: Peraturan Menteri, Keputusan Menteri</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- KLHK -->
-                            <div class="border-2 border-green-200 rounded-lg p-6">
-                                <h3 class="text-lg font-bold text-green-800 mb-4">JDIH KLHK</h3>
-                                <div class="grid grid-cols-1 gap-4">
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
-                                        <input type="text" value="${state.config.scraper.esdm_klhk.klhk.keywords.join(', ')}" 
-                                            onchange="state.config.scraper.esdm_klhk.klhk.keywords = this.value.split(',').map(s => s.trim())"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                        <p class="text-xs text-gray-500 mt-1">Contoh: pertambangan, lingkungan, kehutanan, reklamasi</p>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Jenis Peraturan (pisahkan dengan koma)</label>
-                                        <input type="text" value="${state.config.scraper.esdm_klhk.klhk.types.join(', ')}" 
-                                            onchange="state.config.scraper.esdm_klhk.klhk.types = this.value.split(',').map(s => s.trim())"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- General Settings -->
-                            <div class="border-2 border-gray-200 rounded-lg p-6">
-                                <h3 class="text-lg font-bold text-gray-800 mb-4">Pengaturan Umum</h3>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Limit per Run</label>
-                                        <input type="number" value="${state.config.scraper.esdm_klhk.limit}" min="5" max="50"
-                                            onchange="state.config.scraper.esdm_klhk.limit = parseInt(this.value)"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Auto-publish setelah (hari)</label>
-                                        <input type="number" value="${state.config.scraper.esdm_klhk.auto_publish_days}" min="1" max="30"
-                                            onchange="state.config.scraper.esdm_klhk.auto_publish_days = parseInt(this.value)"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                <div class="bg-white rounded-xl shadow-lg p-8">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">⚙️ Konfigurasi Scraper</h2>
+                    
+                    <div class="bg-blue-50 border-2 border-blue-200 rounded-lg p-6 mb-6">
+                        <h3 class="font-bold text-blue-800 mb-3">ℹ️ Informasi</h3>
+                        <ul class="space-y-2 text-sm text-blue-700">
+                            <li>• Konfigurasi disimpan di GitHub (config.json)</li>
+                            <li>• Perubahan akan mempengaruhi scraping berikutnya</li>
+                            <li>• Scraper ESDM & KLHK: Setiap hari pukul 08:00 WIB</li>
+                            <li>• Scraper Perda: Setiap Minggu pukul 09:00 WIB</li>
+                            <li>• Refresh halaman dalam 1-2 menit setelah menyimpan</li>
+                        </ul>
                     </div>
 
-                    <!-- Perda Config -->
-                    <div class="bg-white rounded-xl shadow-lg p-8">
-                        <h2 class="text-2xl font-bold text-gray-800 mb-6">🏛️ Konfigurasi Perda Scraper</h2>
-                        
-                        <div class="space-y-6">
-                            <div class="border-2 border-purple-200 rounded-lg p-6">
-                                <h3 class="text-lg font-bold text-purple-800 mb-4">Pengaturan Perda</h3>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                                        <select class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg"
-                                            onchange="state.config.scraper.perda.enabled = this.value === 'true'">
-                                            <option value="true" ${state.config.scraper.perda.enabled ? 'selected' : ''}>Aktif</option>
-                                            <option value="false" ${!state.config.scraper.perda.enabled ? 'selected' : ''}>Nonaktif</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-2">Limit per Provinsi</label>
-                                        <input type="number" value="${state.config.scraper.perda.limit}" min="5" max="50"
-                                            onchange="state.config.scraper.perda.limit = parseInt(this.value)"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                    </div>
-                                </div>
-                                
+                    <div class="space-y-6">
+                        <!-- ESDM/KLHK Settings -->
+                        <div class="border-2 border-gray-200 rounded-lg p-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">JDIH ESDM & KLHK</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">Filter Keywords (pisahkan dengan koma)</label>
-                                    <input type="text" value="${state.config.scraper.perda.keywords.join(', ')}" 
-                                        onchange="state.config.scraper.perda.keywords = this.value.split(',').map(s => s.trim())"
-                                        class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg"
-                                        placeholder="pertambangan, tambang, mineral, galian">
-                                    <p class="text-xs text-gray-500 mt-1">Perda yang mengandung kata kunci ini akan di-scrape</p>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Limit per Run</label>
+                                    <input type="number" value="${state.config.scraper.esdm_klhk.limit}" min="5" max="50"
+                                        onchange="state.config.scraper.esdm_klhk.limit = parseInt(this.value)"
+                                        class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
                                 </div>
-
-                                <div class="mt-4">
-                                    <label class="block text-sm font-medium text-gray-700 mb-3">Provinsi Target</label>
-                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        ${state.config.scraper.perda.provinces.map((prov, idx) => `
-                                            <div class="flex items-center justify-between p-3 border-2 border-gray-200 rounded-lg">
-                                                <div class="flex items-center gap-3">
-                                                    <input type="checkbox" ${prov.enabled ? 'checked' : ''} 
-                                                        onchange="state.config.scraper.perda.provinces[${idx}].enabled = this.checked"
-                                                        class="w-5 h-5 text-purple-600 rounded">
-                                                    <label class="text-sm font-medium text-gray-700">${prov.name} (${prov.code})</label>
-                                                </div>
-                                            </div>
-                                        `).join('')}
-                                    </div>
-                                </div>
-
-                                <div class="mt-4 bg-purple-50 p-4 rounded-lg">
-                                    <p class="text-sm text-purple-800"><strong>💡 Info:</strong></p>
-                                    <p class="text-sm text-purple-700 mt-1">• Scraper akan mencari perda yang mengandung keywords di atas</p>
-                                    <p class="text-sm text-purple-700">• Jika keywords kosong, semua perda akan di-scrape</p>
-                                    <p class="text-sm text-purple-700">• Limit mengatur berapa banyak perda per provinsi</p>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Auto-publish (hari)</label>
+                                    <input type="number" value="${state.config.scraper.esdm_klhk.auto_publish_days}" min="1" max="30"
+                                        onchange="state.config.scraper.esdm_klhk.auto_publish_days = parseInt(this.value)"
+                                        class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Actions -->
-                    <div class="bg-white rounded-xl shadow-lg p-6">
-                        <div class="flex flex-wrap gap-3">
+                        <!-- Perda Settings -->
+                        <div class="border-2 border-purple-200 rounded-lg p-6">
+                            <h3 class="text-lg font-bold text-purple-800 mb-4">Perda Scraper</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                                    <select class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg"
+                                        onchange="state.config.scraper.perda.enabled = this.value === 'true'">
+                                        <option value="true" ${state.config.scraper.perda.enabled ? 'selected' : ''}>Aktif</option>
+                                        <option value="false" ${!state.config.scraper.perda.enabled ? 'selected' : ''}>Nonaktif</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Limit per Provinsi</label>
+                                    <input type="number" value="${state.config.scraper.perda.limit}" min="5" max="50"
+                                        onchange="state.config.scraper.perda.limit = parseInt(this.value)"
+                                        class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
+                                <input type="text" value="${state.config.scraper.perda.keywords.join(', ')}" 
+                                    onchange="state.config.scraper.perda.keywords = this.value.split(',').map(s => s.trim())"
+                                    class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg"
+                                    placeholder="pertambangan, tambang, mineral">
+                            </div>
+                        </div>
+
+                        <!-- Save Button -->
+                        <div class="flex gap-3">
                             <button onclick="saveConfig()" class="bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition">
-                                💾 Simpan Konfigurasi ke GitHub
+                                💾 Simpan ke GitHub
                             </button>
                             <button onclick="loadData()" class="bg-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
                                 🔄 Refresh Data
                             </button>
                         </div>
-                    </div>
-
-                    <!-- Info -->
-                    <div class="bg-blue-50 border-2 border-blue-200 rounded-lg p-6">
-                        <h3 class="font-bold text-blue-800 mb-3">ℹ️ Cara Kerja Konfigurasi</h3>
-                        <ul class="space-y-2 text-sm text-blue-700">
-                            <li>• Konfigurasi disimpan di GitHub (config.json)</li>
-                            <li>• Perubahan akan mempengaruhi scraping berikutnya</li>
-                            <li>• Scraper ESDM & KLHK berjalan setiap hari pukul 08:00 WIB</li>
-                            <li>• Scraper Perda berjalan setiap Minggu pukul 09:00 WIB</li>
-                            <li>• Refresh halaman dalam 1-2 menit setelah menyimpan untuk melihat perubahan</li>
-                        </ul>
                     </div>
                 </div>
             `;
@@ -709,35 +731,7 @@
 
                         <div class="p-6 space-y-6">
                             <div>
-                                <h3 class="font-bold text-gray-800 mb-3">Display Settings</h3>
-                                <div class="space-y-3">
-                                    <div>
-                                        <label class="flex items-center justify-between">
-                                            <span class="text-sm text-gray-700">Tampilkan Statistik</span>
-                                            <input type="checkbox" ${state.config.display.showStats ? 'checked' : ''}
-                                                onchange="state.config.display.showStats = this.checked; render()"
-                                                class="w-5 h-5 text-yellow-600 rounded">
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="flex items-center justify-between">
-                                            <span class="text-sm text-gray-700">Tampilkan Last Update</span>
-                                            <input type="checkbox" ${state.config.display.showLastUpdate ? 'checked' : ''}
-                                                onchange="state.config.display.showLastUpdate = this.checked; render()"
-                                                class="w-5 h-5 text-yellow-600 rounded">
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-700 mb-2">Items per Page</label>
-                                        <input type="number" value="${state.config.display.itemsPerPage}" min="10" max="100" step="10"
-                                            onchange="state.config.display.itemsPerPage = parseInt(this.value); render()"
-                                            class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div>
-                                <h3 class="font-bold text-gray-800 mb-3">Scraper Quick Settings</h3>
+                                <h3 class="font-bold text-gray-800 mb-3">Scraper Settings</h3>
                                 <div class="space-y-3">
                                     <div>
                                         <label class="block text-sm text-gray-700 mb-2">ESDM/KLHK Limit</label>
@@ -757,13 +751,8 @@
                             <div class="pt-6 border-t">
                                 <button onclick="saveConfig(); toggleConfigPanel()" 
                                     class="w-full bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition">
-                                    💾 Simpan ke GitHub
+                                    💾 Simpan
                                 </button>
-                            </div>
-
-                            <div class="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
-                                <p class="text-xs text-yellow-800"><strong>⚠️ Catatan:</strong></p>
-                                <p class="text-xs text-yellow-700 mt-1">Perubahan konfigurasi akan tersimpan di GitHub dan mempengaruhi scraping berikutnya.</p>
                             </div>
                         </div>
                     </div>
@@ -803,10 +792,24 @@
 
         // Initialize
         async function init() {
-            await loadConfig();
-            await loadData();
+            log('=== INITIALIZATION START ===');
+            log('Repository:', GITHUB_REPO);
+            
+            try {
+                await loadConfig();
+                await loadData();
+                log('=== INITIALIZATION COMPLETE ===');
+            } catch (error) {
+                log('=== INITIALIZATION FAILED ===', error);
+                console.error('Init error:', error);
+                state.loading = false;
+                state.loadingError = error.message;
+                render();
+            }
         }
 
+        // Start app
+        log('Starting app...');
         init();
     </script>
 </body>
