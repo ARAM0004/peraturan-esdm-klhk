@@ -497,7 +497,7 @@
 
         function renderPublishedContent() {
             return `
-                ${state.config.display.showStats ? renderStats() : ''}
+                ${state.config?.display?.showStats ? renderStats() : ''}
                 ${renderFilters()}
                 ${renderRegulationsList(getPaginatedData())}
                 ${renderPagination()}
