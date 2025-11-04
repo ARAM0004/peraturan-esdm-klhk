@@ -38,10 +38,10 @@ jobs:
           echo "⚠️  config.json not found, will use default config"
         fi
     
-    - name: Run Perda scraper v2
+    - name: Run Perda scraper v3
       run: |
         echo "🏛️ Starting Perda scraper (SULUT & KALTARA)..."
-        python .scripts/scraper_perda_v2.py
+        python .scripts/scraper_perda_v3.py
     
     - name: Configure Git
       run: |
