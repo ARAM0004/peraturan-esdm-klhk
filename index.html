@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portal Peraturan ESDM, KLHK & Perda</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #ca8a04;
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-in {
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        
+        /* Mobile optimizations */
+        @media (max-width: 640px) {
+            .mobile-text-sm { font-size: 0.875rem; }
+            .mobile-p-2 { padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-50 min-h-screen">
+    <div id="app"></div>
+
+    <script>
+        // ==================== CONFIGURATION ====================
+        const GITHUB_REPO = "ARAM0004/peraturan-esdm-klhk";
+        const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}`;
+        const RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main`;
+
+        const DEFAULT_CONFIG = {
+            scraper: {
+                esdm: {
+                    enabled: true,
+                    keywords: ['pertambangan', 'mineral', 'batubara', 'tambang'],
+                    types: ['Peraturan Menteri', 'Keputusan Menteri'],
+                    limit: 10,
+                    schedule: '0 1 * * *'
+                },
+                klhk: {
+                    enabled: true,
+                    keywords: ['pertambangan', 'lingkungan', 'kehutanan', 'reklamasi', 'amdal'],
+                    types: ['Peraturan Menteri', 'Keputusan Menteri'],
+                    limit: 10,
+                    schedule: '0 1 * * *'
+                },
+                perda: {
+                    enabled: true,
+                    keywords: ['pertambangan', 'tambang', 'mineral', 'galian'],
+                    provinces: [
+                        { name: 'Sulawesi Utara', code: 'SULUT', url: 'https://jdih.sulutprov.go.id/', enabled: true },
+                        { name: 'Kalimantan Utara', code: 'KALTARA', url: 'https://jdih.kaltaraprov.go.id/', enabled: true }
+                    ],
+                    limit: 20,
+                    schedule: '0 2 * * 0'
+                }
+            },
+            general: {
+                auto_publish_days: 7,
+                timezone: 'Asia/Jakarta'
+            },
+            display: {
+                itemsPerPage: 20,
+                showStats: true
+            }
+        };
+
+        // ==================== STATE ====================
+        let state = {
+            regulations: [],
+            pendingRegs: [],
+            filteredRegs: [],
+            searchTerm: '',
+            selectedCategory: 'Semua',
+            selectedMinistry: 'Semua',
+            isAdmin: false,
+            activeTab: 'published',
+            loading: true,
+            loadingError: null,
+            lastScrapedDate: null,
+            showConfigModal: false,
+            processingAction: false,
+            notification: null,
+            config: JSON.parse(JSON.stringify(DEFAULT_CONFIG)),
+            currentPage: 1
+        };
+
+        const categories = ['Semua', 'Perizinan', 'Lingkungan', 'Keselamatan Kerja', 'Teknis Pertambangan', 'Reklamasi', 'Pajak & Royalti', 'Perda', 'Lainnya'];
+        const ministries = ['Semua', 'ESDM', 'KLHK', 'Perda', 'Gabungan'];
+
+        // ==================== NOTIFICATION ====================
+        function showNotification(message, type = 'info') {
+            state.notification = { message, type };
+            render();
+            setTimeout(() => {
+                state.notification = null;
+                render();
+            }, 5000);
+        }
+
+        // ==================== DATA LOADING ====================
+        async function loadData() {
+            try {
+                const url = `${RAW_URL}/regulations.json?t=${Date.now()}`;
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                state.regulations = data.published || [];
+                state.pendingRegs = data.pending || [];
+                state.lastScrapedDate = data.lastUpdated;
+                
+                showNotification('✅ Data berhasil dimuat', 'success');
+            } catch (error) {
+                console.error('Error loading data:', error);
+                state.loadingError = error.message;
+                showNotification('⚠️ Gagal memuat data: ' + error.message, 'error');
+            } finally {
+                state.loading = false;
+                filterRegulations();
+                render();
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const url = `${RAW_URL}/config.json?t=${Date.now()}`;
+                const response = await fetch(url);
+                
+                if (response.ok) {
+                    const config = await response.json();
+                    state.config = config;
+                } else {
+                    state.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+                }
+            } catch (error) {
+                console.error('Error loading config:', error);
+                state.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+            }
+        }
+
+        // ==================== CONFIG MANAGEMENT ====================
+        async function saveConfigToGitHub() {
+            state.processingAction = true;
+            render();
+
+            try {
+                // Update config.json
+                const configPayload = {
+                    scraper: state.config.scraper,
+                    general: state.config.general,
+                    last_updated: new Date().toISOString(),
+                    updated_by: 'web_interface'
+                };
+
+                const getConfigResponse = await fetch(`${GITHUB_API}/contents/config.json`);
+                const configFileData = await getConfigResponse.json();
+
+                await fetch(`${GITHUB_API}/contents/config.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: `Update config from web interface - ${new Date().toISOString()}`,
+                        content: btoa(JSON.stringify(configPayload, null, 2)),
+                        sha: configFileData.sha
+                    })
+                });
+
+                showNotification('✅ Konfigurasi disimpan! Scraper akan menggunakan setting baru pada run berikutnya.', 'success');
+                state.showConfigModal = false;
+                
+                setTimeout(() => {
+                    loadConfig();
+                }, 2000);
+            } catch (error) {
+                console.error('Error saving config:', error);
+                showNotification('❌ Gagal menyimpan konfigurasi: ' + error.message, 'error');
+            } finally {
+                state.processingAction = false;
+                render();
+            }
+        }
+
+        // ==================== FILTERING ====================
+        function filterRegulations() {
+            let filtered = state.regulations;
+
+            if (state.selectedMinistry !== 'Semua') {
+                filtered = filtered.filter(reg => reg.ministry === state.selectedMinistry);
+            }
+
+            if (state.selectedCategory !== 'Semua') {
+                filtered = filtered.filter(reg => reg.category === state.selectedCategory);
+            }
+
+            if (state.searchTerm) {
+                const term = state.searchTerm.toLowerCase();
+                filtered = filtered.filter(reg =>
+                    reg.title.toLowerCase().includes(term) ||
+                    reg.number.toLowerCase().includes(term) ||
+                    (reg.summary && reg.summary.toLowerCase().includes(term))
+                );
+            }
+
+            state.filteredRegs = filtered;
+        }
+
+        // ==================== HELPERS ====================
+        function getMinistryColor(ministry) {
+            const colors = {
+                'ESDM': 'bg-blue-100 text-blue-800 border-blue-300',
+                'KLHK': 'bg-green-100 text-green-800 border-green-300',
+                'Perda': 'bg-purple-100 text-purple-800 border-purple-300',
+                'Gabungan': 'bg-orange-100 text-orange-800 border-orange-300'
+            };
+            return colors[ministry] || 'bg-gray-100 text-gray-800 border-gray-300';
+        }
+
+        function getCategoryIcon(category) {
+            const icons = {
+                'Perizinan': '📋', 'Lingkungan': '🌱', 'Keselamatan Kerja': '⛑️',
+                'Teknis Pertambangan': '⚒️', 'Reklamasi': '🌳', 'Pajak & Royalti': '💰',
+                'Perda': '🏛️', 'Lainnya': '📄'
+            };
+            return icons[category] || '📄';
+        }
+
+        function formatDate(dateStr) {
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric' });
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        function toggleAdmin() {
+            state.isAdmin = !state.isAdmin;
+            if (!state.isAdmin) state.activeTab = 'published';
+            render();
+        }
+
+        function setActiveTab(tab) {
+            state.activeTab = tab;
+            state.currentPage = 1;
+            render();
+        }
+
+        function toggleConfigModal() {
+            state.showConfigModal = !state.showConfigModal;
+            render();
+        }
+
+        // ==================== PAGINATION ====================
+        function getPaginatedData() {
+            const itemsPerPage = state.config.display.itemsPerPage;
+            const start = (state.currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            return state.filteredRegs.slice(start, end);
+        }
+
+        function getTotalPages() {
+            return Math.ceil(state.filteredRegs.length / state.config.display.itemsPerPage);
+        }
+
+        function changePage(page) {
+            state.currentPage = page;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            render();
+        }
+
+        // ==================== RENDER FUNCTIONS ====================
+        function render() {
+            const app = document.getElementById('app');
+            
+            if (state.loading) {
+                app.innerHTML = renderLoading();
+                return;
+            }
+
+            if (state.loadingError) {
+                app.innerHTML = renderError();
+                return;
+            }
+
+            app.innerHTML = `
+                ${renderNotification()}
+                ${renderHeader()}
+                <div class="max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 py-4 sm:py-8">
+                    ${state.isAdmin ? renderAdminTabs() : ''}
+                    ${state.activeTab === 'published' || !state.isAdmin ? renderPublishedContent() : ''}
+                    ${state.isAdmin && state.activeTab === 'config' ? renderConfigContent() : ''}
+                </div>
+                ${state.showConfigModal ? renderConfigModal() : ''}
+                ${state.processingAction ? renderProcessingOverlay() : ''}
+            `;
+
+            attachEventListeners();
+        }
+
+        function renderLoading() {
+            return `
+                <div class="min-h-screen flex items-center justify-center p-4">
+                    <div class="text-center">
+                        <div class="spinner mx-auto mb-4"></div>
+                        <p class="text-gray-600 text-sm sm:text-lg">Memuat data dari GitHub...</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderError() {
+            return `
+                <div class="min-h-screen flex items-center justify-center p-4">
+                    <div class="text-center max-w-lg">
+                        <div class="text-4xl sm:text-6xl mb-4">❌</div>
+                        <h1 class="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Gagal Memuat Data</h1>
+                        <p class="text-sm sm:text-base text-gray-600 mb-4">${state.loadingError}</p>
+                        <button onclick="location.reload()" 
+                            class="bg-blue-600 text-white px-6 py-2 sm:py-3 rounded-lg font-semibold hover:bg-blue-700 transition text-sm sm:text-base">
+                            🔄 Coba Lagi
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderNotification() {
+            if (!state.notification) return '';
+            
+            const colors = {
+                success: 'bg-green-50 border-green-500 text-green-800',
+                error: 'bg-red-50 border-red-500 text-red-800',
+                info: 'bg-blue-50 border-blue-500 text-blue-800'
+            };
+
+            return `
+                <div class="fixed top-4 right-4 left-4 sm:left-auto z-50 fade-in">
+                    <div class="border-l-4 p-3 sm:p-4 rounded-lg shadow-xl max-w-md ${colors[state.notification.type]}">
+                        <p class="font-medium text-sm sm:text-base">${state.notification.message}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderProcessingOverlay() {
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-xl p-6 sm:p-8 text-center">
+                        <div class="spinner mx-auto mb-4"></div>
+                        <p class="text-gray-700 font-medium text-sm sm:text-base">Memproses... Mohon tunggu</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHeader() {
+            return `
+                <header class="bg-gradient-to-r from-yellow-600 to-amber-600 text-white shadow-xl">
+                    <div class="max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 py-3 sm:py-6">
+                        <div class="flex items-center justify-between flex-wrap gap-2 sm:gap-4">
+                            <div class="flex items-center space-x-2 sm:space-x-4">
+                                <div class="bg-white p-2 sm:p-3 rounded-lg shadow-lg">
+                                    <svg class="h-6 w-6 sm:h-8 sm:w-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function renderConfigContent() {
+            return `
+                <div class="space-y-4 sm:space-y-6">
+                    <div class="bg-white rounded-xl shadow-lg p-4 sm:p-8">
+                        <h2 class="text-xl sm:text-2xl font-bold text-gray-800 mb-4 sm:mb-6">⚙️ Konfigurasi Scraper</h2>
+                        
+                        <div class="bg-blue-50 border-2 border-blue-200 rounded-lg p-3 sm:p-6 mb-4 sm:mb-6">
+                            <h3 class="font-bold text-blue-800 mb-2 sm:mb-3 text-sm sm:text-base">ℹ️ Informasi</h3>
+                            <ul class="space-y-1 sm:space-y-2 text-xs sm:text-sm text-blue-700">
+                                <li>• Edit keyword dan limit untuk scraping otomatis</li>
+                                <li>• Perubahan akan diterapkan pada scraping berikutnya</li>
+                                <li>• ESDM & KLHK: Setiap hari pukul 08:00 WIB</li>
+                                <li>• Perda: Setiap Minggu pukul 09:00 WIB</li>
+                            </ul>
+                        </div>
+
+                        <div class="space-y-4 sm:space-y-6">
+                            <!-- ESDM Config -->
+                            <div class="border-2 border-blue-200 rounded-lg p-3 sm:p-6">
+                                <h3 class="text-base sm:text-lg font-bold text-blue-800 mb-3 sm:mb-4">📘 ESDM</h3>
+                                <div class="space-y-3 sm:space-y-4">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
+                                        <input type="text" id="esdm-keywords" value="${state.config.scraper.esdm.keywords.join(', ')}" 
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm"
+                                            placeholder="pertambangan, mineral, batubara">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Limit per Scraping</label>
+                                        <input type="number" id="esdm-limit" value="${state.config.scraper.esdm.limit}" min="5" max="50"
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- KLHK Config -->
+                            <div class="border-2 border-green-200 rounded-lg p-3 sm:p-6">
+                                <h3 class="text-base sm:text-lg font-bold text-green-800 mb-3 sm:mb-4">🌳 KLHK</h3>
+                                <div class="space-y-3 sm:space-y-4">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
+                                        <input type="text" id="klhk-keywords" value="${state.config.scraper.klhk.keywords.join(', ')}" 
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm"
+                                            placeholder="pertambangan, lingkungan, kehutanan">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Limit per Scraping</label>
+                                        <input type="number" id="klhk-limit" value="${state.config.scraper.klhk.limit}" min="5" max="50"
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Perda Config -->
+                            <div class="border-2 border-purple-200 rounded-lg p-3 sm:p-6">
+                                <h3 class="text-base sm:text-lg font-bold text-purple-800 mb-3 sm:mb-4">🏛️ Perda</h3>
+                                <div class="space-y-3 sm:space-y-4">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Keywords (pisahkan dengan koma)</label>
+                                        <input type="text" id="perda-keywords" value="${state.config.scraper.perda.keywords.join(', ')}" 
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm"
+                                            placeholder="pertambangan, tambang, mineral">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-2">Limit per Provinsi</label>
+                                        <input type="number" id="perda-limit" value="${state.config.scraper.perda.limit}" min="5" max="50"
+                                            class="w-full px-3 sm:px-4 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Save Button -->
+                            <div class="flex gap-2 sm:gap-3">
+                                <button onclick="saveConfigFromPanel()" class="flex-1 bg-green-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold hover:bg-green-700 transition text-xs sm:text-base">
+                                    💾 Simpan ke GitHub
+                                </button>
+                                <button onclick="loadData()" class="flex-1 bg-blue-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold hover:bg-blue-700 transition text-xs sm:text-base">
+                                    🔄 Refresh Data
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderConfigModal() {
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-2 sm:p-4" onclick="toggleConfigModal()">
+                    <div class="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
+                        <div class="sticky top-0 bg-white border-b-2 border-gray-200 p-3 sm:p-6 flex items-center justify-between rounded-t-xl">
+                            <h2 class="text-lg sm:text-2xl font-bold text-gray-800">⚙️ Edit Konfigurasi</h2>
+                            <button onclick="toggleConfigModal()" class="p-2 hover:bg-gray-100 rounded-lg">
+                                <svg class="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="p-3 sm:p-6 space-y-4 sm:space-y-6">
+                            <!-- ESDM -->
+                            <div class="border-2 border-blue-200 rounded-lg p-3 sm:p-4">
+                                <h3 class="text-sm sm:text-base font-bold text-blue-800 mb-3">📘 ESDM</h3>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Keywords</label>
+                                        <input type="text" id="modal-esdm-keywords" value="${state.config.scraper.esdm.keywords.join(', ')}" 
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Limit</label>
+                                        <input type="number" id="modal-esdm-limit" value="${state.config.scraper.esdm.limit}" min="5" max="50"
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- KLHK -->
+                            <div class="border-2 border-green-200 rounded-lg p-3 sm:p-4">
+                                <h3 class="text-sm sm:text-base font-bold text-green-800 mb-3">🌳 KLHK</h3>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Keywords</label>
+                                        <input type="text" id="modal-klhk-keywords" value="${state.config.scraper.klhk.keywords.join(', ')}" 
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Limit</label>
+                                        <input type="number" id="modal-klhk-limit" value="${state.config.scraper.klhk.limit}" min="5" max="50"
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Perda -->
+                            <div class="border-2 border-purple-200 rounded-lg p-3 sm:p-4">
+                                <h3 class="text-sm sm:text-base font-bold text-purple-800 mb-3">🏛️ Perda</h3>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Keywords</label>
+                                        <input type="text" id="modal-perda-keywords" value="${state.config.scraper.perda.keywords.join(', ')}" 
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs sm:text-sm font-medium text-gray-700 mb-1 sm:mb-2">Limit</label>
+                                        <input type="number" id="modal-perda-limit" value="${state.config.scraper.perda.limit}" min="5" max="50"
+                                            class="w-full px-2 sm:px-3 py-2 border-2 border-gray-300 rounded-lg text-xs sm:text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button onclick="saveConfigFromModal()" 
+                                class="w-full bg-green-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold hover:bg-green-700 transition text-xs sm:text-base">
+                                💾 Simpan Konfigurasi
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ==================== CONFIG SAVE FUNCTIONS ====================
+        function saveConfigFromPanel() {
+            // Get values from config panel
+            const esdmKeywords = document.getElementById('esdm-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const esdmLimit = parseInt(document.getElementById('esdm-limit').value);
+            const klhkKeywords = document.getElementById('klhk-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const klhkLimit = parseInt(document.getElementById('klhk-limit').value);
+            const perdaKeywords = document.getElementById('perda-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const perdaLimit = parseInt(document.getElementById('perda-limit').value);
+
+            // Update state
+            state.config.scraper.esdm.keywords = esdmKeywords;
+            state.config.scraper.esdm.limit = esdmLimit;
+            state.config.scraper.klhk.keywords = klhkKeywords;
+            state.config.scraper.klhk.limit = klhkLimit;
+            state.config.scraper.perda.keywords = perdaKeywords;
+            state.config.scraper.perda.limit = perdaLimit;
+
+            // Save to GitHub
+            saveConfigToGitHub();
+        }
+
+        function saveConfigFromModal() {
+            // Get values from modal
+            const esdmKeywords = document.getElementById('modal-esdm-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const esdmLimit = parseInt(document.getElementById('modal-esdm-limit').value);
+            const klhkKeywords = document.getElementById('modal-klhk-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const klhkLimit = parseInt(document.getElementById('modal-klhk-limit').value);
+            const perdaKeywords = document.getElementById('modal-perda-keywords').value.split(',').map(s => s.trim()).filter(s => s);
+            const perdaLimit = parseInt(document.getElementById('modal-perda-limit').value);
+
+            // Update state
+            state.config.scraper.esdm.keywords = esdmKeywords;
+            state.config.scraper.esdm.limit = esdmLimit;
+            state.config.scraper.klhk.keywords = klhkKeywords;
+            state.config.scraper.klhk.limit = klhkLimit;
+            state.config.scraper.perda.keywords = perdaKeywords;
+            state.config.scraper.perda.limit = perdaLimit;
+
+            // Save to GitHub
+            saveConfigToGitHub();
+        }
+
+        // ==================== EVENT LISTENERS ====================
+        function attachEventListeners() {
+            const searchInput = document.getElementById('searchInput');
+            const ministrySelect = document.getElementById('ministrySelect');
+            const categorySelect = document.getElementById('categorySelect');
+
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    state.searchTerm = e.target.value;
+                    state.currentPage = 1;
+                    filterRegulations();
+                    render();
+                });
+            }
+
+            if (ministrySelect) {
+                ministrySelect.addEventListener('change', (e) => {
+                    state.selectedMinistry = e.target.value;
+                    state.currentPage = 1;
+                    filterRegulations();
+                    render();
+                });
+            }
+
+            if (categorySelect) {
+                categorySelect.addEventListener('change', (e) => {
+                    state.selectedCategory = e.target.value;
+                    state.currentPage = 1;
+                    filterRegulations();
+                    render();
+                });
+            }
+        }
+
+        // ==================== INITIALIZATION ====================
+        async function init() {
+            try {
+                await loadConfig();
+                await loadData();
+            } catch (error) {
+                console.error('Init error:', error);
+                state.loading = false;
+                state.loadingError = error.message;
+                render();
+            }
+        }
+
+        // Start app
+        init();
+    </script>
+</body>
+</html>>
+                                <div>
+                                    <h1 class="text-lg sm:text-2xl lg:text-3xl font-bold">Portal Peraturan ESDM, KLHK & Perda</h1>
+                                    <p class="text-yellow-100 text-xs sm:text-sm mt-1 hidden sm:block">Auto-Update • Config Editor • GitHub Actions</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-2 sm:space-x-3">
+                                ${state.isAdmin ? `
+                                    <button onclick="toggleConfigModal()" class="bg-white bg-opacity-20 text-white px-3 sm:px-4 py-2 rounded-lg font-semibold hover:bg-opacity-30 transition text-xs sm:text-sm">
+                                        ⚙️ <span class="hidden sm:inline">Config</span>
+                                    </button>
+                                ` : ''}
+                                <button onclick="toggleAdmin()" class="bg-white text-yellow-700 px-3 sm:px-4 py-2 rounded-lg font-semibold hover:bg-yellow-50 transition text-xs sm:text-sm">
+                                    ${state.isAdmin ? '👁️' : '🔐'} <span class="hidden sm:inline">${state.isAdmin ? 'Publik' : 'Admin'}</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            `;
+        }
+
+        function renderAdminTabs() {
+            return `
+                <div class="mb-4 sm:mb-6 bg-white rounded-xl shadow-lg p-1 sm:p-2 flex space-x-1 sm:space-x-2 overflow-x-auto">
+                    <button onclick="setActiveTab('published')" class="flex-1 min-w-max px-3 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition text-xs sm:text-base ${state.activeTab === 'published' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
+                        ✓ Published (${state.regulations.length})
+                    </button>
+                    <button onclick="setActiveTab('config')" class="flex-1 min-w-max px-3 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition text-xs sm:text-base ${state.activeTab === 'config' ? 'bg-yellow-600 text-white' : 'text-gray-600 hover:bg-gray-100'}">
+                        ⚙️ Konfigurasi
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderPublishedContent() {
+            return `
+                ${state.config?.display?.showStats ? renderStats() : ''}
+                ${renderFilters()}
+                ${renderRegulationsList(getPaginatedData())}
+                ${renderPagination()}
+            `;
+        }
+
+        function renderStats() {
+            const esdmCount = state.regulations.filter(r => r.ministry === 'ESDM').length;
+            const klhkCount = state.regulations.filter(r => r.ministry === 'KLHK').length;
+            const perdaCount = state.regulations.filter(r => r.ministry === 'Perda').length;
+
+            return `
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 mb-6 sm:mb-8">
+                    <div class="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-l-4 border-yellow-500">
+                        <p class="text-gray-500 text-xs sm:text-sm font-medium">Total</p>
+                        <p class="text-xl sm:text-3xl font-bold text-gray-800 mt-1">${state.regulations.length}</p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-l-4 border-blue-600">
+                        <p class="text-gray-500 text-xs sm:text-sm font-medium">ESDM</p>
+                        <p class="text-xl sm:text-3xl font-bold text-gray-800 mt-1">${esdmCount}</p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-l-4 border-green-600">
+                        <p class="text-gray-500 text-xs sm:text-sm font-medium">KLHK</p>
+                        <p class="text-xl sm:text-3xl font-bold text-gray-800 mt-1">${klhkCount}</p>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-lg p-3 sm:p-6 border-l-4 border-purple-600">
+                        <p class="text-gray-500 text-xs sm:text-sm font-medium">Perda</p>
+                        <p class="text-xl sm:text-3xl font-bold text-gray-800 mt-1">${perdaCount}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderFilters() {
+            return `
+                <div class="bg-white rounded-xl shadow-lg p-3 sm:p-6 mb-6 sm:mb-8">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 sm:gap-4">
+                        <div class="md:col-span-2">
+                            <input type="text" id="searchInput" placeholder="🔍 Cari..." value="${state.searchTerm}" 
+                                class="w-full px-3 sm:px-4 py-2 sm:py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition text-sm sm:text-base">
+                        </div>
+                        <div>
+                            <select id="ministrySelect" class="w-full px-3 sm:px-4 py-2 sm:py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition text-sm sm:text-base">
+                                ${ministries.map(m => `<option value="${m}" ${m === state.selectedMinistry ? 'selected' : ''}>${m}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <select id="categorySelect" class="w-full px-3 sm:px-4 py-2 sm:py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent transition text-sm sm:text-base">
+                                ${categories.map(c => `<option value="${c}" ${c === state.selectedCategory ? 'selected' : ''}>${c}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderPagination() {
+            const totalPages = getTotalPages();
+            if (totalPages <= 1) return '';
+
+            const maxVisible = 3;
+            let startPage = Math.max(1, state.currentPage - Math.floor(maxVisible / 2));
+            let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+            if (endPage - startPage < maxVisible - 1) {
+                startPage = Math.max(1, endPage - maxVisible + 1);
+            }
+
+            return `
+                <div class="mt-6 sm:mt-8 flex justify-center items-center gap-1 sm:gap-2 flex-wrap">
+                    <button onclick="changePage(${state.currentPage - 1})" ${state.currentPage === 1 ? 'disabled' : ''} 
+                        class="px-2 sm:px-4 py-2 rounded-lg bg-white border-2 border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition text-xs sm:text-base">
+                        ← <span class="hidden sm:inline">Prev</span>
+                    </button>
+                    
+                    ${startPage > 1 ? `
+                        <button onclick="changePage(1)" class="px-2 sm:px-4 py-2 rounded-lg bg-white border-2 border-gray-300 hover:bg-gray-50 text-xs sm:text-base">1</button>
+                        ${startPage > 2 ? '<span class="px-1 sm:px-2 text-xs sm:text-base">...</span>' : ''}
+                    ` : ''}
+
+                    ${Array.from({length: endPage - startPage + 1}, (_, i) => startPage + i).map(page => `
+                        <button onclick="changePage(${page})" 
+                            class="px-2 sm:px-4 py-2 rounded-lg border-2 transition text-xs sm:text-base ${page === state.currentPage ? 'bg-yellow-600 text-white border-yellow-600' : 'bg-white border-gray-300 hover:bg-gray-50'}">
+                            ${page}
+                        </button>
+                    `).join('')}
+
+                    ${endPage < totalPages ? `
+                        ${endPage < totalPages - 1 ? '<span class="px-1 sm:px-2 text-xs sm:text-base">...</span>' : ''}
+                        <button onclick="changePage(${totalPages})" class="px-2 sm:px-4 py-2 rounded-lg bg-white border-2 border-gray-300 hover:bg-gray-50 text-xs sm:text-base">${totalPages}</button>
+                    ` : ''}
+
+                    <button onclick="changePage(${state.currentPage + 1})" ${state.currentPage === totalPages ? 'disabled' : ''} 
+                        class="px-2 sm:px-4 py-2 rounded-lg bg-white border-2 border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition text-xs sm:text-base">
+                        <span class="hidden sm:inline">Next</span> →
+                    </button>
+                </div>
+                <div class="mt-3 sm:mt-4 text-center text-xs sm:text-sm text-gray-600">
+                    ${((state.currentPage - 1) * state.config.display.itemsPerPage) + 1} - ${Math.min(state.currentPage * state.config.display.itemsPerPage, state.filteredRegs.length)} dari ${state.filteredRegs.length}
+                </div>
+            `;
+        }
+
+        function renderRegulationsList(regulations) {
+            if (regulations.length === 0) {
+                return `
+                    <div class="bg-white rounded-xl shadow-lg p-8 sm:p-12 text-center">
+                        <div class="text-4xl sm:text-6xl mb-4">🔭</div>
+                        <p class="text-gray-500 text-sm sm:text-lg">Tidak ada peraturan yang ditemukan</p>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="space-y-3 sm:space-y-4">
+                    ${regulations.map(reg => `
+                        <div class="bg-white rounded-xl shadow-lg hover:shadow-2xl transition-all p-3 sm:p-6 border-l-4 border-yellow-500 fade-in">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <div class="flex items-center flex-wrap gap-1 sm:gap-2 mb-2 sm:mb-3">
+                                        <span class="text-lg sm:text-2xl">${getCategoryIcon(reg.category)}</span>
+                                        <span class="px-2 sm:px-3 py-1 rounded-full text-xs font-semibold border ${getMinistryColor(reg.ministry)}">${reg.ministry}</span>
+                                        <span class="px-2 sm:px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-300">${reg.category}</span>
+                                    </div>
+                                    <h3 class="text-sm sm:text-xl font-bold text-gray-800 mb-2 hover:text-yellow-700 transition">${reg.title}</h3>
+                                    <p class="text-xs sm:text-sm font-semibold text-yellow-700 mb-2 sm:mb-3">${reg.number}</p>
+                                    <p class="text-xs sm:text-base text-gray-600 mb-2 sm:mb-4 leading-relaxed line-clamp-2">${reg.summary || ''}</p>
+                                    <div class="flex items-center flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm text-gray-500">
+                                        <span class="flex items-center gap-1">📅 ${formatDate(reg.date)}</span>
+                                        ${reg.link ? `<a href="${reg.link}" target="_blank" class="text-yellow-600 hover:text-yellow-700 font-medium flex items-center gap-1 hover:underline">📥 Dokumen</a>` : ''}
+                                    </div>
+                                </div
