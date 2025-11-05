@@ -821,3 +821,28 @@
                                         ${reg.link ? `<a href="${reg.link}" target="_blank" class="text-yellow-600 hover:text-yellow-700 font-medium flex items-center gap-1 hover:underline">📥 Dokumen</a>` : ''}
                                     </div>
                                 </div
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // ==================== INITIALIZATION ====================
+        async function init() {
+            try {
+                await loadConfig();
+                await loadData();
+            } catch (error) {
+                console.error('Init error:', error);
+                state.loading = false;
+                state.loadingError = error.message;
+                render();
+            }
+        }
+
+        // Start app
+        init();
+    </script>
+</body>
+</html>
