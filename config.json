@@ -1,45 +1,40 @@
 {
   "scraper": {
-    "esdm": {
+    "esdm_klhk": {
       "enabled": true,
-      "keywords": ["pertambangan", "mineral", "batubara", "tambang"],
-      "types": ["Peraturan Menteri", "Keputusan Menteri", "Peraturan Pemerintah", "Undang-Undang"],
+      "schedule": "0 1 * * *",
       "limit": 10,
-      "schedule": "0 1 * * *"
-    },
-    "klhk": {
-      "enabled": true,
-      "keywords": ["pertambangan", "lingkungan", "kehutanan", "reklamasi", "amdal"],
-      "types": ["Peraturan Menteri", "Keputusan Menteri", "Peraturan Pemerintah", "Undang-Undang"],
-      "limit": 10,
-      "schedule": "0 1 * * *"
+      "auto_publish_days": 7
     },
     "perda": {
       "enabled": true,
-      "keywords": ["pertambangan", "tambang", "mineral", "galian"],
+      "schedule": "0 2 * * 0",
+      "limit": 20,
       "provinces": [
         {
+          "url": "https://jdih.sulutprov.go.id/",
           "name": "Sulawesi Utara",
           "code": "SULUT",
-          "url": "https://jdih.sulutprov.go.id/",
           "enabled": true
         },
         {
+          "url": "https://jdih.kaltaraprov.go.id/",
           "name": "Kalimantan Utara",
           "code": "KALTARA",
-          "url": "https://jdih.kaltaraprov.go.id/",
           "enabled": true
         }
       ],
-      "limit": 20,
-      "schedule": "0 2 * * 0"
+      "keywords": [
+        "pertambangan",
+        "tambang",
+        "mineral"
+      ]
     }
   },
-  "general": {
-    "auto_publish_days": 7,
-    "timezone": "Asia/Jakarta",
-    "notification_email": ""
-  },
-  "last_updated": "2024-11-02T10:00:00Z",
-  "updated_by": "system"
+  "display": {
+    "theme": "yellow",
+    "itemsPerPage": 20,
+    "showStats": true,
+    "showLastUpdate": true
+  }
 }
