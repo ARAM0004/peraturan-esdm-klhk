@@ -1,0 +1,73 @@
+name: Update Config from Web Request
+
+on:
+  push:
+    paths:
+      - "trigger/*.json"
+    branches:
+      - scraper-dan-html  # sesuaikan dengan branch kamu
+
+jobs:
+  update-config:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # agar bisa commit ke repo
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Load trigger JSON
+        id: load
+        run: |
+          echo "Membaca trigger file..."
+          FILE=$(ls trigger/*.json | head -n 1)
+          echo "Trigger file: $FILE"
+          cat "$FILE"
+          echo "TRIGGER_FILE=$FILE" >> $GITHUB_ENV
+
+      - name: Parse and update config
+        id: update
+        run: |
+          echo "Memperbarui config.json..."
+          python3 - <<'PYCODE'
+          import json, os, glob
+          trigger_files = glob.glob("trigger/*.json")
+          if not trigger_files:
+              raise SystemExit("No trigger file found in trigger/")
+          trigger_file = trigger_files[0]
+          with open(trigger_file, "r", encoding="utf-8") as f:
+              data = json.load(f)
+          
+          if data.get("action") != "update_config":
+              raise SystemExit("Invalid trigger action")
+
+          config = data.get("config")
+          if not config:
+              raise SystemExit("No config found in trigger")
+
+          # Simpan ke config.json
+          with open("config.json", "w", encoding="utf-8") as f:
+              json.dump(config, f, indent=2, ensure_ascii=False)
+
+          print("config.json berhasil diperbarui dari trigger file.")
+          PYCODE
+
+      - name: Commit and push updated config
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add config.json
+          git commit -m "Update config.json via trigger file" || echo "No changes to commit"
+          git push origin HEAD:scraper-dan-html
+
+      - name: Clean up trigger file
+        run: |
+          rm -f $TRIGGER_FILE
+          git add trigger/
+          git commit -m "Hapus trigger file setelah diproses" || echo "Tidak ada perubahan"
+          git push origin HEAD:scraper-dan-html
