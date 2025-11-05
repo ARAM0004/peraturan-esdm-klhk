@@ -196,7 +196,7 @@
         async function saveConfig() {
             state.processingAction = true;
             render();
-
+        
             try {
                 const payload = {
                     action: 'update_config',
@@ -204,34 +204,22 @@
                     updated_by: 'web_interface',
                     timestamp: new Date().toISOString()
                 };
-
-                const getResponse = await fetch(`${GITHUB_API}/contents/trigger/config_update.json`);
-                const fileData = await getResponse.json();
-
-                const updateResponse = await fetch(`${GITHUB_API}/contents/trigger/config_update.json`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: 'Update configuration from web interface',
-                        content: btoa(JSON.stringify(payload, null, 2)),
-                        sha: fileData.sha
-                    })
-                });
-
-                if (updateResponse.ok) {
-                    showNotification('✅ Konfigurasi disimpan! Refresh dalam 1-2 menit.', 'success');
-                    state.showConfigPanel = false;
-                } else {
-                    throw new Error('GitHub API request failed');
-                }
+        
+                // SIMPAN PAYLOAD KE REPO VIA RAW.GITHUBUSERCONTENT DENGAN ACTION DETECTION
+                const url = `${RAW_URL}/trigger_request.json?t=${Date.now()}`;
+                await fetch(url, { method: 'POST', body: JSON.stringify(payload) });
+        
+                showNotification('✅ Permintaan update dikirim ke GitHub Action. Tunggu 1–2 menit.', 'success');
+                state.showConfigPanel = false;
             } catch (error) {
                 console.error('Error saving config:', error);
-                showNotification('❌ Gagal menyimpan konfigurasi', 'error');
+                showNotification('❌ Gagal mengirim permintaan konfigurasi', 'error');
             } finally {
                 state.processingAction = false;
                 render();
             }
         }
+
 
         function filterRegulations() {
             log('Filtering regulations...');
