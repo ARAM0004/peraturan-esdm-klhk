@@ -416,6 +416,105 @@
       margin-bottom: 20px;
       border-radius: 5px;
     }
+
+    .scraper-status {
+      background: #e3f2fd;
+      border: 2px solid #1976d2;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .scraper-status.running {
+      background: #fff3e0;
+      border-color: #f57c00;
+    }
+
+    .scraper-status.success {
+      background: #e8f5e9;
+      border-color: #4caf50;
+    }
+
+    .scraper-status.error {
+      background: #ffebee;
+      border-color: #f44336;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      transition: width 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 0.8em;
+      font-weight: bold;
+    }
+
+    .log-console {
+      background: #1e1e1e;
+      color: #00ff00;
+      padding: 15px;
+      border-radius: 5px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.85em;
+      max-height: 300px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+
+    .log-console .log-line {
+      margin: 2px 0;
+    }
+
+    .log-console .log-error {
+      color: #ff5555;
+    }
+
+    .log-console .log-success {
+      color: #50fa7b;
+    }
+
+    .log-console .log-info {
+      color: #8be9fd;
+    }
+
+    .scraper-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .stat-card {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      border: 2px solid #ddd;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2em;
+      font-weight: bold;
+      color: #667eea;
+    }
+
+    .stat-label {
+      color: #666;
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
   </style>
 </head>
 <body>
@@ -428,6 +527,7 @@
     <div class="tabs">
       <button class="tab active" onclick="switchTab('published')">📋 Published</button>
       <button class="tab" onclick="switchTab('pending')">⏳ Pending Review</button>
+      <button class="tab" onclick="switchTab('scraper')">🤖 Scraper</button>
       <button class="tab" onclick="switchTab('config')">⚙️ Configuration</button>
     </div>
 
@@ -507,7 +607,19 @@
       },
       searchTerm: '',
       filterMinistry: 'all',
-      lastUpdated: null
+      lastUpdated: null,
+      scraper: {
+        isRunning: false,
+        progress: 0,
+        logs: [],
+        stats: {
+          total: 0,
+          success: 0,
+          failed: 0,
+          duplicate: 0
+        },
+        lastRun: null
+      }
     };
 
     // Initialize
@@ -579,6 +691,9 @@
         case 'pending':
           renderPendingContent(content);
           break;
+        case 'scraper':
+          renderScraperContent(content);
+          break;
         case 'config':
           renderConfigContent(content);
           break;
@@ -620,6 +735,133 @@
       }
 
       container.innerHTML = html;
+    }
+
+    // Render scraper content
+    function renderScraperContent(container) {
+      const scraper = state.scraper;
+      const statusClass = scraper.isRunning ? 'running' : (scraper.logs.length > 0 && scraper.logs[scraper.logs.length - 1].includes('✅') ? 'success' : '');
+      
+      let html = `
+        <div class="admin-banner">
+          🤖 Scraper Control Panel
+        </div>
+
+        <!-- Scraper Status -->
+        <div class="scraper-status ${statusClass}">
+          <h3 style="margin-bottom: 10px;">
+            ${scraper.isRunning ? '🔄 Scraper Sedang Berjalan...' : '⚡ Scraper Ready'}
+          </h3>
+          
+          ${scraper.isRunning ? `
+            <div class="progress-bar">
+              <div class="progress-fill" style="width: ${scraper.progress}%">
+                ${scraper.progress}%
+              </div>
+            </div>
+          ` : ''}
+
+          <div class="scraper-controls">
+            <button class="btn ${scraper.isRunning ? 'btn-secondary' : 'btn-success'}" 
+                    onclick="runScraper('all')" 
+                    ${scraper.isRunning ? 'disabled' : ''}>
+              🚀 Run All Sources
+            </button>
+            <button class="btn ${scraper.isRunning ? 'btn-secondary' : 'btn-primary'}" 
+                    onclick="runScraper('esdm')" 
+                    ${scraper.isRunning ? 'disabled' : ''}>
+              ⚡ ESDM Only
+            </button>
+            <button class="btn ${scraper.isRunning ? 'btn-secondary' : 'btn-primary'}" 
+                    onclick="runScraper('klhk')" 
+                    ${scraper.isRunning ? 'disabled' : ''}>
+              🌳 KLHK Only
+            </button>
+            <button class="btn ${scraper.isRunning ? 'btn-secondary' : 'btn-primary'}" 
+                    onclick="runScraper('perda')" 
+                    ${scraper.isRunning ? 'disabled' : ''}>
+              📜 Perda Only
+            </button>
+            <button class="btn btn-danger" 
+                    onclick="stopScraper()" 
+                    ${!scraper.isRunning ? 'disabled' : ''}>
+              ⏹️ Stop
+            </button>
+            <button class="btn btn-secondary" onclick="clearLogs()">
+              🗑️ Clear Logs
+            </button>
+          </div>
+
+          ${scraper.lastRun ? `
+            <p style="margin-top: 15px; color: #666; font-size: 0.9em;">
+              Last run: ${new Date(scraper.lastRun).toLocaleString('id-ID')}
+            </p>
+          ` : ''}
+        </div>
+
+        <!-- Statistics -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
+          <div class="stat-card">
+            <div class="stat-value">${scraper.stats.total}</div>
+            <div class="stat-label">Total Scraped</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: #4caf50;">${scraper.stats.success}</div>
+            <div class="stat-label">Success</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: #ff9800;">${scraper.stats.duplicate}</div>
+            <div class="stat-label">Duplicate</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: #f44336;">${scraper.stats.failed}</div>
+            <div class="stat-label">Failed</div>
+          </div>
+        </div>
+
+        <!-- Console Log -->
+        <div class="config-section">
+          <h3>📋 Console Log</h3>
+          <div class="log-console" id="scraperLogs">
+            ${scraper.logs.length === 0 ? 
+              '<div class="log-line log-info">Waiting for scraper to start...</div>' :
+              scraper.logs.map(log => `<div class="log-line ${getLogClass(log)}">${log}</div>`).join('')
+            }
+          </div>
+        </div>
+
+        <!-- Configuration Info -->
+        <div class="config-section" style="background: #e3f2fd; border-color: #1976d2;">
+          <h3 style="color: #1976d2;">ℹ️ Current Configuration</h3>
+          <p><strong>Limit Per Run:</strong> ${state.config.limitPerRun} items</p>
+          <p><strong>Active Keywords:</strong></p>
+          <ul style="margin-left: 20px; color: #666;">
+            <li>ESDM: ${state.config.keywords.esdm.join(', ')}</li>
+            <li>KLHK: ${state.config.keywords.klhk.join(', ')}</li>
+            <li>Perda: ${state.config.keywords.perda.join(', ')}</li>
+          </ul>
+          <p style="margin-top: 10px;"><strong>Auto Publish:</strong> ${state.config.autoPublish ? '✅ Enabled' : '❌ Disabled'}</p>
+        </div>
+      `;
+
+      container.innerHTML = html;
+      
+      // Auto scroll logs to bottom
+      if (scraper.logs.length > 0) {
+        setTimeout(() => {
+          const logContainer = document.getElementById('scraperLogs');
+          if (logContainer) {
+            logContainer.scrollTop = logContainer.scrollHeight;
+          }
+        }, 100);
+      }
+    }
+
+    // Get log class based on content
+    function getLogClass(log) {
+      if (log.includes('❌') || log.includes('ERROR') || log.includes('Failed')) return 'log-error';
+      if (log.includes('✅') || log.includes('SUCCESS') || log.includes('Complete')) return 'log-success';
+      return 'log-info';
     }
 
     // Render pending regulations
@@ -956,6 +1198,159 @@
       
       URL.revokeObjectURL(url);
       alert('📥 Data berhasil diekspor!');
+    }
+
+    // Scraper functions
+    function addLog(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString('id-ID');
+      const log = `[${timestamp}] ${message}`;
+      state.scraper.logs.push(log);
+      
+      // Keep only last 100 logs
+      if (state.scraper.logs.length > 100) {
+        state.scraper.logs.shift();
+      }
+      
+      if (state.currentTab === 'scraper') {
+        renderCurrentTab();
+      }
+    }
+
+    async function runScraper(source = 'all') {
+      if (state.scraper.isRunning) {
+        alert('⚠️ Scraper sudah berjalan!');
+        return;
+      }
+
+      state.scraper.isRunning = true;
+      state.scraper.progress = 0;
+      state.scraper.stats = { total: 0, success: 0, failed: 0, duplicate: 0 };
+      state.scraper.logs = [];
+      
+      addLog('🚀 Starting scraper...');
+      addLog(`📌 Source: ${source.toUpperCase()}`);
+      addLog(`📊 Limit: ${state.config.limitPerRun} items`);
+      renderCurrentTab();
+
+      try {
+        // Simulate scraping process (replace with actual scraper logic)
+        const sources = source === 'all' ? ['esdm', 'klhk', 'perda'] : [source];
+        let totalItems = 0;
+        
+        for (let i = 0; i < sources.length; i++) {
+          const src = sources[i];
+          addLog(`\n🔍 Scraping ${src.toUpperCase()}...`);
+          
+          const keywords = state.config.keywords[src];
+          addLog(`🔑 Keywords: ${keywords.join(', ')}`);
+          
+          // Simulate scraping with progress
+          const itemsToScrape = Math.min(state.config.limitPerRun, Math.floor(Math.random() * 20) + 5);
+          
+          for (let j = 0; j < itemsToScrape; j++) {
+            if (!state.scraper.isRunning) {
+              addLog('⏹️ Scraper stopped by user');
+              break;
+            }
+
+            await sleep(100); // Simulate network delay
+            
+            const mockReg = {
+              title: `${src.toUpperCase()} Peraturan Test ${j + 1} - ${Date.now()}`,
+              number: `${j + 1}/${new Date().getFullYear()}`,
+              ministry: src === 'perda' ? 'Perda' : src.toUpperCase(),
+              category: keywords[Math.floor(Math.random() * keywords.length)],
+              date: new Date().toISOString().split('T')[0],
+              summary: `Ini adalah regulasi hasil scraping otomatis dari sumber ${src}`,
+              link: `https://example.com/regulation/${Date.now()}`,
+              status: 'Aktif',
+              scrapedDate: new Date().toISOString()
+            };
+
+            // Check for duplicates
+            const isDuplicate = state.pendingRegs.some(r => r.title === mockReg.title) || 
+                                state.publishedRegs.some(r => r.title === mockReg.title);
+
+            if (isDuplicate) {
+              state.scraper.stats.duplicate++;
+              addLog(`⚠️ Duplicate: ${mockReg.title.substring(0, 50)}...`);
+            } else {
+              // Add to pending
+              state.pendingRegs.push(mockReg);
+              state.scraper.stats.success++;
+              addLog(`✅ Added: ${mockReg.title.substring(0, 50)}...`);
+            }
+
+            state.scraper.stats.total++;
+            totalItems++;
+            
+            // Update progress
+            state.scraper.progress = Math.round(((i * itemsToScrape + j + 1) / (sources.length * itemsToScrape)) * 100);
+            
+            if (state.currentTab === 'scraper') {
+              renderCurrentTab();
+            }
+
+            // Respect limit
+            if (totalItems >= state.config.limitPerRun) {
+              addLog(`⚠️ Reached limit of ${state.config.limitPerRun} items`);
+              break;
+            }
+          }
+
+          if (!state.scraper.isRunning || totalItems >= state.config.limitPerRun) {
+            break;
+          }
+        }
+
+        state.scraper.progress = 100;
+        state.scraper.lastRun = new Date().toISOString();
+        
+        addLog('\n🎉 Scraping complete!');
+        addLog(`📊 Total: ${state.scraper.stats.total} | Success: ${state.scraper.stats.success} | Duplicate: ${state.scraper.stats.duplicate} | Failed: ${state.scraper.stats.failed}`);
+        
+        // Auto-publish if enabled
+        if (state.config.autoPublish && state.config.autoPublishDate) {
+          const targetDate = new Date(state.config.autoPublishDate);
+          const now = new Date();
+          
+          if (now >= targetDate) {
+            addLog('🤖 Auto-publish triggered...');
+            const publishCount = state.pendingRegs.length;
+            state.publishedRegs = [...state.pendingRegs, ...state.publishedRegs];
+            state.pendingRegs = [];
+            addLog(`✅ Auto-published ${publishCount} regulations`);
+          }
+        }
+
+      } catch (error) {
+        addLog(`❌ ERROR: ${error.message}`);
+        state.scraper.stats.failed++;
+      } finally {
+        state.scraper.isRunning = false;
+        renderCurrentTab();
+      }
+
+      // TODO: Save to GitHub
+      console.log("Scraping complete. TODO: Save to GitHub");
+    }
+
+    function stopScraper() {
+      if (state.scraper.isRunning) {
+        state.scraper.isRunning = false;
+        addLog('⏹️ Stopping scraper...');
+        setTimeout(() => renderCurrentTab(), 500);
+      }
+    }
+
+    function clearLogs() {
+      state.scraper.logs = [];
+      state.scraper.stats = { total: 0, success: 0, failed: 0, duplicate: 0 };
+      renderCurrentTab();
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     // Show error
