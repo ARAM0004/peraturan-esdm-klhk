@@ -1,0 +1,31 @@
+{
+  "action": "update_config",
+  "updated_by": "web_interface",
+  "timestamp": "2025-11-05T15:30:00Z",
+  "config": {
+    "scraper": {
+      "esdm_klhk": {
+        "enabled": true,
+        "schedule": "0 1 * * *",
+        "limit": 10,
+        "auto_publish_days": 7
+      },
+      "perda": {
+        "enabled": true,
+        "schedule": "0 2 * * 0",
+        "limit": 20,
+        "provinces": [
+          { "url": "https://jdih.sulutprov.go.id/", "name": "Sulawesi Utara", "code": "SULUT", "enabled": true },
+          { "url": "https://jdih.kaltaraprov.go.id/", "name": "Kalimantan Utara", "code": "KALTARA", "enabled": true }
+        ],
+        "keywords": ["pertambangan", "tambang", "mineral"]
+      }
+    },
+    "display": {
+      "theme": "yellow",
+      "itemsPerPage": 20,
+      "showStats": true,
+      "showLastUpdate": true
+    }
+  }
+}
