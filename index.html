@@ -896,4 +896,95 @@
 
     function closeAddModal() {
       document.getElementById('addRegulationModal').style.display = 'none';
-      //
+      // Clear form
+      document.getElementById('newTitle').value = '';
+      document.getElementById('newNumber').value = '';
+      document.getElementById('newMinistry').value = 'ESDM';
+      document.getElementById('newCategory').value = '';
+      document.getElementById('newDate').valueAsDate = new Date();
+      document.getElementById('newLink').value = '';
+      document.getElementById('newSummary').value = '';
+    }
+
+    function saveNewRegulation() {
+      const newReg = {
+        title: document.getElementById('newTitle').value.trim(),
+        number: document.getElementById('newNumber').value.trim(),
+        ministry: document.getElementById('newMinistry').value,
+        category: document.getElementById('newCategory').value.trim(),
+        date: document.getElementById('newDate').value,
+        link: document.getElementById('newLink').value.trim(),
+        summary: document.getElementById('newSummary').value.trim(),
+        status: 'Aktif',
+        addedDate: new Date().toISOString()
+      };
+
+      // Validation
+      if (!newReg.title) {
+        alert('⚠️ Judul harus diisi!');
+        return;
+      }
+
+      // Add to published
+      state.publishedRegs.unshift(newReg);
+      closeAddModal();
+      switchTab('published');
+      alert(`✅ Regulasi "${newReg.title}" berhasil ditambahkan!`);
+      
+      console.log("New regulation added:", newReg);
+      // TODO: Save to GitHub
+    }
+
+    // Export data
+    function exportData() {
+      const exportData = {
+        published: state.publishedRegs,
+        pending: state.pendingRegs,
+        config: state.config,
+        exportDate: new Date().toISOString(),
+        branch: BRANCH
+      };
+
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `peraturan-esdm-klhk-export-${new Date().toISOString().split('T')[0]}.json`;
+      link.click();
+      
+      URL.revokeObjectURL(url);
+      alert('📥 Data berhasil diekspor!');
+    }
+
+    // Show error
+    function showError(message) {
+      const container = document.getElementById('mainContent');
+      container.innerHTML = `
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color: #dc3545;">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="15" y1="9" x2="9" y2="15"/>
+            <line x1="9" y1="9" x2="15" y2="15"/>
+          </svg>
+          <h3>Error</h3>
+          <p>${message}</p>
+          <button class="btn btn-primary" onclick="init()">Coba Lagi</button>
+        </div>
+      `;
+    }
+
+    // Close modal when clicking outside
+    window.onclick = function(event) {
+      const modal = document.getElementById('addRegulationModal');
+      if (event.target == modal) {
+        closeAddModal();
+      }
+    }
+
+    // Initialize app
+    init();
+  </script>
+</body>
+</html>
