@@ -654,20 +654,34 @@
 
     // Trigger GitHub Actions workflow (requires token)
     async function triggerWorkflow() {
-      // Check if token is stored
       const token = localStorage.getItem('github_token');
       
       if (!token) {
         showTokenModal();
         return;
       }
-
+    
       try {
         addLog('🔄 Triggering GitHub Actions workflow...');
         addLog(`📝 Workflow: ${GITHUB_API.workflows[selectedWorkflow]}`);
+        
+        // Prepare inputs from current config state
+        const inputs = {
+          keywords_esdm: state.config.keywords.esdm.join(','),
+          keywords_klhk: state.config.keywords.klhk.join(','),
+          keywords_perda: state.config.keywords.perda.join(','),
+          limit_per_run: state.config.limitPerRun.toString()
+        };
+        
+        addLog('📊 Using current browser config:');
+        addLog(`   • ESDM: [${inputs.keywords_esdm}]`);
+        addLog(`   • KLHK: [${inputs.keywords_klhk}]`);
+        addLog(`   • Perda: [${inputs.keywords_perda}]`);
+        addLog(`   • Limit: ${inputs.limit_per_run}`);
+        
         state.scraper.isRunning = true;
         renderCurrentTab();
-
+    
         const workflowFile = GITHUB_API.workflows[selectedWorkflow];
         const url = `https://api.github.com/repos/${GITHUB_API.owner}/${GITHUB_API.repo}/actions/workflows/${workflowFile}/dispatches`;
         
@@ -680,12 +694,13 @@
             'X-GitHub-Api-Version': '2022-11-28'
           },
           body: JSON.stringify({
-            ref: BRANCH
+            ref: BRANCH,
+            inputs: inputs  // ✅ Kirim config sebagai workflow inputs
           })
         });
-
+    
         if (response.status === 204) {
-          addLog('✅ Workflow triggered successfully!');
+          addLog('✅ Workflow triggered successfully with custom config!');
           addLog('⏳ Waiting for workflow to start...');
           
           // Wait and check status
@@ -698,6 +713,32 @@
           addLog('❌ Authentication failed. Token might be invalid.');
           localStorage.removeItem('github_token');
           showTokenModal();
+        } else if (response.status === 422) {
+          addLog('⚠️ Workflow inputs not configured. Triggering without inputs...');
+          
+          // Fallback: trigger tanpa inputs
+          const fallbackResponse = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+              'X-GitHub-Api-Version': '2022-11-28'
+            },
+            body: JSON.stringify({
+              ref: BRANCH
+            })
+          });
+          
+          if (fallbackResponse.status === 204) {
+            addLog('✅ Workflow triggered (using default config from repo)');
+            await sleep(5000);
+            await updateWorkflowStatus();
+            startWorkflowMonitoring();
+          } else {
+            const errorData = await fallbackResponse.json();
+            addLog(`❌ Failed: ${errorData.message || fallbackResponse.statusText}`);
+          }
         } else {
           const errorData = await response.json();
           addLog(`❌ Failed to trigger workflow: ${errorData.message || response.statusText}`);
@@ -917,6 +958,105 @@
         lastRun: null
       }
     };
+    
+    async function saveConfigToGitHub() {
+      const token = localStorage.getItem('github_token');
+      
+      if (!token) {
+        alert('⚠️ GitHub token diperlukan untuk save config!');
+        showTokenModal();
+        return false;
+      }
+    
+      try {
+        addLog('💾 Saving configuration to GitHub...');
+        
+        // 1. Get current config.json SHA (untuk update existing file)
+        const getUrl = `https://api.github.com/repos/${GITHUB_API.owner}/${GITHUB_API.repo}/contents/config.json?ref=${BRANCH}`;
+        const getResponse = await fetch(getUrl, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json'
+          }
+        });
+    
+        let sha = null;
+        let isNewFile = false;
+        
+        if (getResponse.ok) {
+          const currentFile = await getResponse.json();
+          sha = currentFile.sha;
+          addLog('📄 Found existing config.json');
+        } else if (getResponse.status === 404) {
+          isNewFile = true;
+          addLog('📄 Creating new config.json');
+        } else {
+          throw new Error(`Failed to check config file: ${getResponse.statusText}`);
+        }
+    
+        // 2. Prepare config data
+        const configData = {
+          keywords: state.config.keywords,
+          limitPerRun: state.config.limitPerRun,
+          autoPublish: state.config.autoPublish,
+          autoPublishDate: state.config.autoPublishDate,
+          lastUpdated: new Date().toISOString(),
+          updatedBy: 'web-ui',
+          version: '1.0'
+        };
+    
+        addLog(`📊 Config: ESDM[${configData.keywords.esdm.join(',')}]`);
+        addLog(`📊 Config: KLHK[${configData.keywords.klhk.join(',')}]`);
+        addLog(`📊 Config: Perda[${configData.keywords.perda.join(',')}]`);
+        addLog(`📊 Limit: ${configData.limitPerRun}`);
+    
+        // 3. Encode to Base64 (GitHub API requirement)
+        const jsonString = JSON.stringify(configData, null, 2);
+        const content = btoa(unescape(encodeURIComponent(jsonString)));
+        
+        // 4. Update/Create config.json di GitHub
+        const updateUrl = `https://api.github.com/repos/${GITHUB_API.owner}/${GITHUB_API.repo}/contents/config.json`;
+        
+        const payload = {
+          message: `${isNewFile ? 'Create' : 'Update'} config from web UI - ${new Date().toLocaleString('id-ID')}`,
+          content: content,
+          branch: BRANCH
+        };
+        
+        // Include SHA only if updating existing file
+        if (sha) {
+          payload.sha = sha;
+        }
+        
+        const updateResponse = await fetch(updateUrl, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+    
+        if (updateResponse.ok) {
+          const result = await updateResponse.json();
+          addLog('✅ Configuration saved to GitHub successfully!');
+          addLog(`🔗 Commit: ${result.commit.sha.substring(0, 7)}`);
+          alert('✅ Configuration berhasil disimpan ke GitHub!\n\n📌 Scraper akan menggunakan config baru pada run berikutnya (scheduled atau manual trigger).');
+          return true;
+        } else {
+          const error = await updateResponse.json();
+          addLog(`❌ Failed to save config: ${error.message}`);
+          alert(`❌ Gagal menyimpan config: ${error.message}`);
+          return false;
+        }
+      } catch (error) {
+        console.error("Error saving config:", error);
+        addLog(`❌ ERROR: ${error.message}`);
+        alert(`❌ Error: ${error.message}`);
+        return false;
+      }
+    }
 
 // Initialize
     async function init() {
@@ -1253,16 +1393,56 @@
     // Render configuration
     function renderConfigContent(container) {
       const config = state.config;
+      const tokenSaved = hasToken();
       
       let html = `
         <div class="admin-banner">
           ⚙️ Configuration Panel
         </div>
-
+    
+        <!-- Token Warning -->
+        ${!tokenSaved ? `
+        <div class="config-section" style="background: #fff3e0; border-color: #f57c00;">
+          <h3 style="color: #f57c00;">⚠️ GitHub Token Required</h3>
+          <p style="color: #666; margin-bottom: 15px;">
+            Untuk menyimpan configuration ke GitHub dan memastikan scraper menggunakan config Anda, 
+            silakan setup GitHub Personal Access Token terlebih dahulu.
+          </p>
+          <button class="btn btn-primary" onclick="showTokenModal()">🔑 Setup Token Now</button>
+        </div>
+        ` : `
+        <div class="config-section" style="background: #e8f5e9; border-color: #4caf50;">
+          <h3 style="color: #4caf50;">✅ GitHub Token Configured</h3>
+          <p style="color: #666; margin-bottom: 10px;">
+            Token tersimpan. Anda dapat save configuration ke GitHub dan trigger workflow.
+          </p>
+        </div>
+        `}
+    
+        <!-- How Config Works -->
+        <div class="config-section" style="background: #e3f2fd; border-color: #1976d2;">
+          <h3 style="color: #1976d2;">ℹ️ How Configuration Works</h3>
+          <p style="color: #666; margin-bottom: 10px;"><strong>Option 1: Manual Trigger (Recommended)</strong></p>
+          <ul style="margin-left: 20px; color: #666; line-height: 1.8;">
+            <li>Edit config di browser ini</li>
+            <li>Trigger workflow dari tab "Scraper"</li>
+            <li>Config langsung digunakan (tidak perlu save)</li>
+          </ul>
+          <p style="color: #666; margin: 10px 0 10px 0;"><strong>Option 2: Save & Scheduled Runs</strong></p>
+          <ul style="margin-left: 20px; color: #666; line-height: 1.8;">
+            <li>Edit config dan klik "Save Configuration"</li>
+            <li>Config tersimpan di <code>config.json</code> di GitHub</li>
+            <li>Scheduled runs otomatis menggunakan config tersimpan</li>
+          </ul>
+        </div>
+    
         <!-- Keyword Editor -->
         <div class="config-section">
           <h3>🔤 Keyword Editor</h3>
-          <p style="color: #666; margin-bottom: 15px;">Kelola keyword untuk scraping peraturan</p>
+          <p style="color: #666; margin-bottom: 15px;">
+            Keywords digunakan untuk filter peraturan yang relevan saat scraping.
+            ${tokenSaved ? '<strong>💡 Tip: Edit lalu trigger workflow, atau save untuk scheduled runs.</strong>' : ''}
+          </p>
           
           <div class="config-row">
             <label>ESDM Keywords</label>
@@ -1279,7 +1459,7 @@
               <button class="btn btn-primary" onclick="addKeyword('esdm')">Tambah</button>
             </div>
           </div>
-
+    
           <div class="config-row">
             <label>KLHK Keywords</label>
             <div class="keyword-list" id="klhkKeywords">
@@ -1295,7 +1475,7 @@
               <button class="btn btn-primary" onclick="addKeyword('klhk')">Tambah</button>
             </div>
           </div>
-
+    
           <div class="config-row">
             <label>Perda Keywords</label>
             <div class="keyword-list" id="perdaKeywords">
@@ -1312,17 +1492,20 @@
             </div>
           </div>
         </div>
-
+    
         <!-- Scraping Limits -->
         <div class="config-section">
-          <h3>⚡ Limit Per Run</h3>
+          <h3>⚡ Scraping Limits</h3>
           <div class="config-row">
             <label>Jumlah maksimal regulasi per scraping run</label>
             <input type="number" value="${config.limitPerRun}" min="1" max="500" 
                    onchange="updateConfig('limitPerRun', parseInt(this.value))">
+            <p style="color: #999; font-size: 0.9em; margin-top: 5px;">
+              Rekomendasi: 50-100 untuk hasil optimal dan kecepatan
+            </p>
           </div>
         </div>
-
+    
         <!-- Auto Publish -->
         <div class="config-section">
           <h3>🤖 Auto Publish</h3>
@@ -1347,27 +1530,65 @@
             </div>
           ` : ''}
         </div>
-
+    
         <!-- Actions -->
         <div class="config-section">
           <h3>🎯 Actions</h3>
           <div class="action-buttons">
-            <button class="btn btn-success" onclick="saveConfig()">💾 Save Configuration</button>
+            <button class="btn ${tokenSaved ? 'btn-success' : 'btn-secondary'}" 
+                    onclick="saveConfig()"
+                    ${!tokenSaved ? 'disabled' : ''}
+                    title="${!tokenSaved ? 'Requires GitHub token' : 'Save config to GitHub repo'}">
+              💾 Save Configuration to GitHub
+            </button>
             <button class="btn btn-primary" onclick="openAddModal()">➕ Tambah Regulasi Baru</button>
-            <button class="btn btn-secondary" onclick="exportData()">📥 Export Data (Manual)</button>
+            <button class="btn btn-secondary" onclick="exportData()">📥 Export Data (JSON)</button>
+          </div>
+          ${!tokenSaved ? `
+            <p style="color: #999; font-size: 0.9em; margin-top: 10px;">
+              ℹ️ Save configuration memerlukan GitHub token. Setup token di tab Scraper.
+            </p>
+          ` : `
+            <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
+              ✅ Config dapat disimpan ke GitHub. Manual trigger akan langsung gunakan config browser.
+            </p>
+          `}
+        </div>
+    
+        <!-- Current Config Summary -->
+        <div class="config-section" style="background: #f3e5f5; border-color: #7b1fa2;">
+          <h3 style="color: #7b1fa2;">📊 Current Configuration Summary</h3>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div>
+              <p style="color: #666;"><strong>ESDM Keywords:</strong></p>
+              <p style="color: #999; font-size: 0.9em;">${config.keywords.esdm.join(', ')}</p>
+            </div>
+            <div>
+              <p style="color: #666;"><strong>KLHK Keywords:</strong></p>
+              <p style="color: #999; font-size: 0.9em;">${config.keywords.klhk.join(', ')}</p>
+            </div>
+            <div>
+              <p style="color: #666;"><strong>Perda Keywords:</strong></p>
+              <p style="color: #999; font-size: 0.9em;">${config.keywords.perda.join(', ')}</p>
+            </div>
+            <div>
+              <p style="color: #666;"><strong>Limit Per Run:</strong></p>
+              <p style="color: #999; font-size: 0.9em;">${config.limitPerRun} items</p>
+            </div>
           </div>
         </div>
-
+    
         <!-- Info -->
         <div class="config-section" style="background: #e3f2fd; border-color: #1976d2;">
-          <h3 style="color: #1976d2;">ℹ️ Information</h3>
+          <h3 style="color: #1976d2;">ℹ️ Repository Information</h3>
           <p><strong>Branch:</strong> ${BRANCH}</p>
           <p><strong>Last Updated:</strong> ${state.lastUpdated ? new Date(state.lastUpdated).toLocaleString('id-ID') : 'N/A'}</p>
           <p><strong>Published:</strong> ${state.publishedRegs.length} items</p>
           <p><strong>Pending:</strong> ${state.pendingRegs.length} items</p>
+          <p><strong>Config Source:</strong> Browser (in-memory)</p>
         </div>
       `;
-
+    
       container.innerHTML = html;
     }
 
@@ -1463,9 +1684,33 @@
     }
 
     function saveConfig() {
-      console.log("Saving config:", state.config);
-      alert("⚠️ Fitur save ke GitHub memerlukan GitHub API token. Untuk saat ini, config tersimpan di memori browser.");
-      // TODO: Implement GitHub API save
+      const tokenSaved = hasToken();
+      
+      if (!tokenSaved) {
+        if (confirm('⚠️ Untuk menyimpan config ke GitHub, Anda perlu setup token dulu.\n\nSetup sekarang?')) {
+          showTokenModal();
+        }
+        return;
+      }
+    
+      const confirmMessage = `💾 Save Configuration ke GitHub?
+    
+    📌 Yang akan disimpan:
+    • Keywords ESDM: ${state.config.keywords.esdm.join(', ')}
+    • Keywords KLHK: ${state.config.keywords.klhk.join(', ')}
+    • Keywords Perda: ${state.config.keywords.perda.join(', ')}
+    • Limit Per Run: ${state.config.limitPerRun}
+    • Auto Publish: ${state.config.autoPublish ? 'Yes' : 'No'}
+    
+    ✅ Config akan digunakan oleh:
+    - Scheduled runs (otomatis)
+    - Manual trigger (dengan opsi override)
+    
+    Lanjutkan?`;
+    
+      if (confirm(confirmMessage)) {
+        saveConfigToGitHub();
+      }
     }
 
     // Pending actions
